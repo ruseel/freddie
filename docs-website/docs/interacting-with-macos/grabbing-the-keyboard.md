@@ -50,7 +50,7 @@ freddie_keyboard::intercept(move |ev| {
 
 ## Modifier flags
 
-Modifiers arrive as `FlagsChanged` rather than as `KeyDown` and `KeyUp`, and the keycode says which side, so `Key::ShiftLeft` and `Key::ShiftRight` are separate keys. `press_of` reads the direction off the flag bit: the modifier is down if its bit is set after the change.
+Modifiers arrive as `FlagsChanged` rather than as `KeyDown` and `KeyUp`, and the keycode says which side, so `Key::ShiftLeft` and `Key::ShiftRight` are separate keys. `press_of_key` toggles a per-key down set: the flag bit is shared by both sides, so releasing left while right is held still has `SHIFT` set. CapsLock's `AlphaShift` is a latch, same hole, same set.
 
 The root holds the physical truth, one `LeftRightPair` per modifier:
 

@@ -135,19 +135,6 @@ fn from_code(code: CGKeyCode) -> Key {
         .map_or(Key::Raw(code), |(key, _)| *key)
 }
 
-const fn flag_for(key: Key) -> Option<CGEventFlags> {
-    Some(match key {
-        Key::MetaLeft | Key::MetaRight => CGEventFlags::CGEventFlagCommand,
-        Key::ShiftLeft | Key::ShiftRight => CGEventFlags::CGEventFlagShift,
-        Key::AltLeft | Key::AltRight => CGEventFlags::CGEventFlagAlternate,
-        Key::ControlLeft | Key::ControlRight => CGEventFlags::CGEventFlagControl,
-        // Caps lock is FlagsChanged on the wire; without this the tap Keeps it and the OS
-        // toggles AlphaShift while the model never sees the key.
-        Key::CapsLock => CGEventFlags::CGEventFlagAlphaShift,
-        _ => return None,
-    })
-}
-
 /// What the callback should do with a key.
 #[derive(PartialEq, Eq, Debug)]
 enum Decision {
@@ -197,35 +184,51 @@ fn keycode(event: &CGEvent) -> Option<CGKeyCode> {
     u16::try_from(event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)).ok()
 }
 
-/// Press type for `kind`/`key`. For `CapsLock`, `caps_down` tracks physical hold: `AlphaShift` is a
-/// latch, not a hold bit, so flag-based up/down is wrong for dual-role.
-fn press_of_key(
-    kind: CGEventType,
-    event: &CGEvent,
-    key: Key,
-    caps_down: &Cell<bool>,
-) -> Option<PressType> {
+/// Physical down of each `FlagsChanged` key. Direction is a toggle of this set, not the
+/// event's flag bit: that bit is shared by both sides of a modifier, and `CapsLock`'s
+/// `AlphaShift` is a latch.
+struct FlagsChangedDown {
+    bits: Cell<u16>,
+}
+
+impl FlagsChangedDown {
+    const fn new() -> Self {
+        Self { bits: Cell::new(0) }
+    }
+
+    fn toggle(&self, key: Key) -> Option<PressType> {
+        let bit = flags_changed_bit(key)?;
+        let held = self.bits.get();
+        if held & bit != 0 {
+            self.bits.set(held & !bit);
+            Some(PressType::Up)
+        } else {
+            self.bits.set(held | bit);
+            Some(PressType::Down)
+        }
+    }
+}
+
+const fn flags_changed_bit(key: Key) -> Option<u16> {
+    Some(match key {
+        Key::ShiftLeft => 0x0001,
+        Key::ShiftRight => 0x0002,
+        Key::ControlLeft => 0x0004,
+        Key::ControlRight => 0x0008,
+        Key::AltLeft => 0x0010,
+        Key::AltRight => 0x0020,
+        Key::MetaLeft => 0x0040,
+        Key::MetaRight => 0x0080,
+        Key::CapsLock => 0x0100,
+        _ => return None,
+    })
+}
+
+fn press_of_key(kind: CGEventType, key: Key, down: &FlagsChangedDown) -> Option<PressType> {
     match kind {
         CGEventType::KeyDown => Some(PressType::Down),
         CGEventType::KeyUp => Some(PressType::Up),
-        CGEventType::FlagsChanged if key == Key::CapsLock => {
-            if caps_down.get() {
-                caps_down.set(false);
-                Some(PressType::Up)
-            } else {
-                caps_down.set(true);
-                Some(PressType::Down)
-            }
-        }
-        // Other modifiers: down if its flag bit is set after the change.
-        CGEventType::FlagsChanged => {
-            let flag = flag_for(key)?;
-            Some(if event.get_flags().contains(flag) {
-                PressType::Down
-            } else {
-                PressType::Up
-            })
-        }
+        CGEventType::FlagsChanged => down.toggle(key),
         _ => None,
     }
 }
@@ -345,8 +348,7 @@ fn run_tap(
             let _ = signal.send(Err(()));
             return;
         };
-        // CapsLock AlphaShift is a latch, not a hold. Track physical down ourselves.
-        let caps_down = Cell::new(false);
+        let flags_changed_down = FlagsChangedDown::new();
         let outcome = CGEventTap::with_enabled(
             CGEventTapLocation::Session,
             // Head so Drop can stop CapsLock before the OS latches AlphaShift.
@@ -365,7 +367,7 @@ fn run_tap(
                     return CallbackResult::Keep;
                 };
                 let key = from_code(code);
-                let Some(press) = press_of_key(kind, event, key, &caps_down) else {
+                let Some(press) = press_of_key(kind, key, &flags_changed_down) else {
                     return CallbackResult::Keep;
                 };
                 let input = KeyEvent {
@@ -601,8 +603,8 @@ impl Emitter {
 #[cfg(test)]
 mod tests {
     use super::{
-        Decision, EmitError, Tag, decide, flag_for, from_code, intrinsic_flags, keyboard_event,
-        to_cg, to_code,
+        Decision, EmitError, FlagsChangedDown, Tag, decide, flags_changed_bit, from_code,
+        intrinsic_flags, keyboard_event, press_of_key, to_cg, to_code,
     };
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventType, KeyCode};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
@@ -863,28 +865,76 @@ mod tests {
     }
 
     #[test]
-    fn flags_map_modifiers_only() {
+    fn flags_changed_one_side_release_while_the_other_is_held_is_up() {
+        for (left, right) in [
+            (Key::ShiftLeft, Key::ShiftRight),
+            (Key::ControlLeft, Key::ControlRight),
+            (Key::AltLeft, Key::AltRight),
+            (Key::MetaLeft, Key::MetaRight),
+        ] {
+            let down = FlagsChangedDown::new();
+            assert_eq!(
+                press_of_key(CGEventType::FlagsChanged, left, &down),
+                Some(PressType::Down)
+            );
+            assert_eq!(
+                press_of_key(CGEventType::FlagsChanged, right, &down),
+                Some(PressType::Down)
+            );
+            assert_eq!(
+                press_of_key(CGEventType::FlagsChanged, left, &down),
+                Some(PressType::Up),
+                "{left:?} released while {right:?} held"
+            );
+            assert_eq!(
+                press_of_key(CGEventType::FlagsChanged, right, &down),
+                Some(PressType::Up)
+            );
+        }
+    }
+
+    #[test]
+    fn flags_changed_caps_lock_toggles() {
+        let down = FlagsChangedDown::new();
         assert_eq!(
-            flag_for(Key::MetaLeft),
-            Some(CGEventFlags::CGEventFlagCommand)
+            press_of_key(CGEventType::FlagsChanged, Key::CapsLock, &down),
+            Some(PressType::Down)
         );
         assert_eq!(
-            flag_for(Key::ShiftRight),
-            Some(CGEventFlags::CGEventFlagShift)
+            press_of_key(CGEventType::FlagsChanged, Key::CapsLock, &down),
+            Some(PressType::Up)
         );
         assert_eq!(
-            flag_for(Key::ControlLeft),
-            Some(CGEventFlags::CGEventFlagControl)
+            press_of_key(CGEventType::FlagsChanged, Key::CapsLock, &down),
+            Some(PressType::Down)
         );
+    }
+
+    #[test]
+    fn flags_changed_of_a_non_modifier_is_none() {
+        let down = FlagsChangedDown::new();
         assert_eq!(
-            flag_for(Key::AltRight),
-            Some(CGEventFlags::CGEventFlagAlternate)
+            press_of_key(CGEventType::FlagsChanged, Key::KeyA, &down),
+            None
         );
-        assert_eq!(
-            flag_for(Key::CapsLock),
-            Some(CGEventFlags::CGEventFlagAlphaShift)
-        );
-        assert_eq!(flag_for(Key::KeyA), None);
-        assert_eq!(flag_for(Key::Escape), None);
+    }
+
+    #[test]
+    fn flags_changed_bits_cover_each_modifier_side_and_caps_lock() {
+        for key in [
+            Key::ShiftLeft,
+            Key::ShiftRight,
+            Key::ControlLeft,
+            Key::ControlRight,
+            Key::AltLeft,
+            Key::AltRight,
+            Key::MetaLeft,
+            Key::MetaRight,
+            Key::CapsLock,
+        ] {
+            assert!(flags_changed_bit(key).is_some(), "{key:?}");
+        }
+        assert_eq!(flags_changed_bit(Key::KeyA), None);
+        assert_eq!(flags_changed_bit(Key::Escape), None);
     }
 }
