@@ -29,6 +29,7 @@ pub(crate) fn toggle_overlay<'x>(
 
 /// The overlay's hide timer fired. Bound at the root, so it fires from whatever layer is active,
 /// and only for the showing still up: the binding matches the guard the root holds.
+#[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn hide_overlay<'x>(
     _ev: &TimerFired,
     _snap: (),

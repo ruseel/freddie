@@ -30,36 +30,30 @@ fn front(m: &Mercury) -> Option<App> {
 // that schedules it. Equality under `testing` compares the delay and fire event, so a rebuilt one
 // matches what a layer produced.
 fn return_home_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, fired);
+    let (_guard, effect) =
+        freddie::timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, (), MercuryEvent::Timer);
     MercuryEffect::Timer(effect)
 }
 
 // A placement arms the settle wait; this is the effect that schedules it. It bounds how long a
 // move reported for that window counts as mercury's own rather than the user's.
 fn settle_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(PLACEMENT_SETTLE, fired);
+    let (_guard, effect) =
+        freddie::timer_effect_and_guard(PLACEMENT_SETTLE, (), MercuryEvent::Timer);
     MercuryEffect::Timer(effect)
 }
 
-// A firing of `id`. A test reads the id off the effect that set the timer: nothing else can know
-// it, because the timer mints it.
-const fn fired(id: freddie::TimerId) -> MercuryEvent {
-    MercuryEvent::Timer(freddie::TimerFired(id))
-}
-
-// The id a timer effect was set with.
-fn timer_id(effects: &[MercuryEffect]) -> freddie::TimerId {
-    let timer = effects
+fn timer_event(effects: &[MercuryEffect]) -> MercuryEvent {
+    effects
         .iter()
         .find_map(|e| match e {
-            MercuryEffect::Timer(timer) => Some(timer),
+            MercuryEffect::Timer(timer) => match &timer.event {
+                MercuryEvent::Timer(fired) => Some(MercuryEvent::Timer(*fired)),
+                _ => None,
+            },
             _ => None,
         })
-        .expect("these effects set a timer");
-    match timer.event {
-        MercuryEvent::Timer(freddie::TimerFired(id)) => id,
-        ref other => panic!("not a timer firing: {other:?}"),
-    }
+        .expect("these effects set a timer")
 }
 
 // The active return-home layer, or `None` when the active layer is home or typing. The four
@@ -262,7 +256,7 @@ fn nav_times_out_home() {
     let entered = m.handle(&key(Key::KeyN));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Nav(_))));
     // The timer nav set fires: its id came back on the effect that set it.
-    assert_eq!(m.handle(&fired(timer_id(&entered))), vec![shows("Home")]);
+    assert_eq!(m.handle(&timer_event(&entered)), vec![shows("Home")]);
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
@@ -271,13 +265,12 @@ fn a_firing_from_a_layer_already_left_matches_nothing() {
     // Enter nav, leave, and enter again: the first timer's firing arrives late, after a second
     // nav replaced it. It must not send the live one home.
     let mut m = home();
-    let first = timer_id(&m.handle(&key(Key::KeyN)));
+    let first = timer_event(&m.handle(&key(Key::KeyN)));
     let _ = m.handle(&key(Key::Escape));
-    let second = timer_id(&m.handle(&key(Key::KeyN)));
-    assert_ne!(first, second, "each entry sets its own timer");
+    let second = timer_event(&m.handle(&key(Key::KeyN)));
 
     assert_eq!(
-        m.handle(&fired(first)),
+        m.handle(&first),
         vec![],
         "no binding matches a stale firing"
     );
@@ -286,7 +279,7 @@ fn a_firing_from_a_layer_already_left_matches_nothing() {
         "still in nav"
     );
 
-    assert_eq!(m.handle(&fired(second)), vec![shows("Home")]);
+    assert_eq!(m.handle(&second), vec![shows("Home")]);
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
@@ -294,9 +287,9 @@ fn a_firing_from_a_layer_already_left_matches_nothing() {
 fn a_firing_in_a_layer_that_set_no_timer_matches_nothing() {
     // Home sets none, so there is no binding for a firing to match, whatever id it carries.
     let mut m = home();
-    let stale = timer_id(&m.handle(&key(Key::KeyN)));
+    let stale = timer_event(&m.handle(&key(Key::KeyN)));
     let _ = m.handle(&key(Key::Escape));
-    assert_eq!(m.handle(&fired(stale)), vec![]);
+    assert_eq!(m.handle(&stale), vec![]);
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
@@ -1221,7 +1214,7 @@ fn inapp_follows_the_front_app_across_a_switch() {
 // Opening a run arms its window; this is the effect that schedules it. Equality under `testing`
 // compares the delay and the fire event, so a rebuilt one matches what the run produced.
 fn jk_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(JK_TIMEOUT, fired);
+    let (_guard, effect) = freddie::timer_effect_and_guard(JK_TIMEOUT, (), MercuryEvent::Timer);
     MercuryEffect::Timer(effect)
 }
 
@@ -1397,7 +1390,7 @@ fn a_half_typed_run_types_itself_when_the_window_elapses() {
     let opened = m.handle(&key(Key::KeyJ));
     assert_eq!(opened, vec![jk_timer()]);
     assert_eq!(
-        m.handle(&fired(timer_id(&opened))),
+        m.handle(&timer_event(&opened)),
         vec![emit(Key::KeyJ, PressType::Down)]
     );
     assert!(jk(&m).is_idle());
@@ -1414,7 +1407,7 @@ fn a_full_tap_types_itself_when_the_window_elapses() {
     assert_eq!(opened, vec![jk_timer()]);
     assert_eq!(m.handle(&up(Key::KeyJ)), vec![]);
     assert_eq!(
-        m.handle(&fired(timer_id(&opened))),
+        m.handle(&timer_event(&opened)),
         vec![
             emit(Key::KeyJ, PressType::Down),
             emit(Key::KeyJ, PressType::Up),
@@ -1427,30 +1420,26 @@ fn a_firing_from_a_run_that_ended_matches_nothing() {
     // Open a run, break it, open another: the first window's firing arrives late. It must not
     // interrupt the run that replaced it.
     let mut m = typing();
-    let first = timer_id(&m.handle(&key(Key::KeyJ)));
+    let first = timer_event(&m.handle(&key(Key::KeyJ)));
     let _ = m.handle(&key(Key::KeyA)); // breaks it
-    let second = timer_id(&m.handle(&key(Key::KeyJ)));
-    assert_ne!(first, second, "each run sets its own window");
+    let second = timer_event(&m.handle(&key(Key::KeyJ)));
 
     assert_eq!(
-        m.handle(&fired(first)),
+        m.handle(&first),
         vec![],
         "no binding matches a stale firing"
     );
     assert!(!jk(&m).is_idle(), "the live run is untouched");
 
-    assert_eq!(
-        m.handle(&fired(second)),
-        vec![emit(Key::KeyJ, PressType::Down)]
-    );
+    assert_eq!(m.handle(&second), vec![emit(Key::KeyJ, PressType::Down)]);
 }
 
 #[test]
 fn a_firing_with_no_run_in_progress_matches_nothing() {
     let mut m = typing();
-    let stale = timer_id(&m.handle(&key(Key::KeyJ)));
+    let stale = timer_event(&m.handle(&key(Key::KeyJ)));
     let _ = m.handle(&key(Key::KeyA)); // breaks it, so nothing is live
-    assert_eq!(m.handle(&fired(stale)), vec![]);
+    assert_eq!(m.handle(&stale), vec![]);
 }
 
 #[test]
@@ -1466,7 +1455,7 @@ fn the_window_is_armed_once_per_run_not_once_per_key() {
 // The effect `o` produces beside the text: the overlay's hide timer. Equality under `testing`
 // compares the delay and the fire event, and a firing compares equal whatever its id.
 fn overlay_hide_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(OVERLAY_DWELL, fired);
+    let (_guard, effect) = freddie::timer_effect_and_guard(OVERLAY_DWELL, (), MercuryEvent::Timer);
     MercuryEffect::Timer(effect)
 }
 
@@ -1495,8 +1484,8 @@ fn shown_heading(effects: &[MercuryEffect]) -> &'static str {
 }
 
 // The id of the dwell `o` set, which is the timer that follows the overlay's text.
-fn dwell_id(effects: &[MercuryEffect]) -> freddie::TimerId {
-    timer_id(&effects[shown_at(effects)..])
+fn dwell_event(effects: &[MercuryEffect]) -> MercuryEvent {
+    timer_event(&effects[shown_at(effects)..])
 }
 
 #[test]
@@ -1562,11 +1551,11 @@ fn the_overlay_hides_after_the_dwell() {
     let mut m = home();
     let shown = m.handle(&key(Key::KeyO));
     assert_eq!(
-        m.handle(&fired(dwell_id(&shown))),
+        m.handle(&dwell_event(&shown)),
         vec![MercuryEffect::HideOverlay]
     );
     // And again matches nothing: the field was taken, so no binding names that guard.
-    assert_eq!(m.handle(&fired(dwell_id(&shown))), vec![]);
+    assert_eq!(m.handle(&dwell_event(&shown)), vec![]);
 }
 
 #[test]
@@ -1585,13 +1574,12 @@ fn a_dwell_from_a_showing_already_gone_matches_nothing() {
     // Show one in home, leave for nav (which takes it down), and show nav's. The first showing's
     // dwell arrives late and must not take the live one down.
     let mut m = home();
-    let first = dwell_id(&m.handle(&key(Key::KeyO)));
+    let first = dwell_event(&m.handle(&key(Key::KeyO)));
     let _ = m.handle(&key(Key::KeyN));
-    let second = dwell_id(&m.handle(&key(Key::KeyO)));
-    assert_ne!(first, second, "each showing sets its own dwell");
+    let second = dwell_event(&m.handle(&key(Key::KeyO)));
 
-    assert_eq!(m.handle(&fired(first)), vec![]);
-    assert_eq!(m.handle(&fired(second)), vec![MercuryEffect::HideOverlay]);
+    assert_eq!(m.handle(&first), vec![]);
+    assert_eq!(m.handle(&second), vec![MercuryEffect::HideOverlay]);
 }
 
 #[test]
@@ -1963,7 +1951,7 @@ fn a_move_by_hand_forgets_the_remembered_frame() {
     let _ = m.handle(&key(Key::KeyR));
     let effects = m.handle(&key(Key::UpArrow));
     // The settle wait ends, so the window is the user's again.
-    let _ = m.handle(&fired(timer_id(&effects)));
+    let _ = m.handle(&timer_event(&effects));
 
     window_at(
         &mut m,

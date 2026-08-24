@@ -47,6 +47,7 @@ pub(crate) fn pass_through<'x>(
 
 /// The window elapsed with no next key: what the run swallowed types itself, exactly as a key
 /// that broke the run would have made it.
+#[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn jk_timeout<'x>(
     _ev: &TimerFired,
     _snap: (),

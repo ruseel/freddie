@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bind::{Bind, if_not_invalidated};
-use freddie::{KeySequence, TimerFired, TimerGuard, timer_effect_and_guard};
+use freddie::{KeySequence, TimerGuard, timer_effect_and_guard};
 use freddie_keys::Key;
 
 #[allow(clippy::wildcard_imports)]
@@ -28,7 +28,7 @@ pub const JK_TIMEOUT: Duration = Duration::from_millis(200);
 ///
 /// `pub(crate)` because the handler that calls it is not a child of this module.
 pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
-    let (guard, effect) = timer_effect_and_guard(window, |id| MercuryEvent::Timer(TimerFired(id)));
+    let (guard, effect) = timer_effect_and_guard(window, (), MercuryEvent::Timer);
     (guard, MercuryEffect::Timer(effect))
 }
 

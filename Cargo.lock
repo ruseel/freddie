@@ -550,7 +550,7 @@ version = "0.0.1"
 dependencies = [
  "bind",
  "freddie_keys",
- "tokio",
+ "freddie_timer",
 ]
 
 [[package]]
@@ -715,6 +715,14 @@ version = "0.0.1"
 [[package]]
 name = "freddie_sync"
 version = "0.0.1"
+
+[[package]]
+name = "freddie_timer"
+version = "0.0.1"
+dependencies = [
+ "bind",
+ "tokio",
+]
 
 [[package]]
 name = "freddie_windows"

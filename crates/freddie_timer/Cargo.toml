@@ -1,0 +1,18 @@
+[package]
+name = "freddie_timer"
+description = "RAII timers: a guard the node holds and an effect the loop schedules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tokio = { version = "1", features = ["sync"] }
+bind = { path = "../bind", version = "0.0.1", default-features = false, optional = true }
+
+[features]
+testing = []
+bind = ["dep:bind"]
+
+[lints]
+workspace = true

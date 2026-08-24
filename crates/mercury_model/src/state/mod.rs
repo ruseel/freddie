@@ -9,7 +9,7 @@ use std::fmt;
 use std::time::Duration;
 
 use bind::{Bind, if_not_invalidated};
-use freddie::{AlwaysEqual, TimerFired, TimerGuard, timer_effect_and_guard};
+use freddie::{AlwaysEqual, TimerGuard, timer_effect_and_guard};
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
 use freddie_sync::{GenerationMinter, HeldGeneration, RidingGeneration, Synced};
 use freddie_windows_types::{Frame, Monitor, Pid, Placement, WindowId};
@@ -50,9 +50,7 @@ pub const RETURN_TO_HOME_TIMEOUT: Duration = Duration::from_secs(10);
 /// schedules it. It fires after [`RETURN_TO_HOME_TIMEOUT`], and the layer that set it binds that
 /// firing home, matching on the guard it still holds.
 pub(crate) fn arm_return_home() -> (TimerGuard, MercuryEffect) {
-    let (guard, effect) = timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, |id| {
-        MercuryEvent::Timer(TimerFired(id))
-    });
+    let (guard, effect) = timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, (), MercuryEvent::Timer);
     (guard, MercuryEffect::Timer(effect))
 }
 
@@ -374,8 +372,7 @@ impl Windows {
     /// callers need it; what they differ on is the remembered frame, which this leaves
     /// alone.
     fn asking_for(&mut self, placement: Placement) -> Vec<MercuryEffect> {
-        let (timer, effect) =
-            timer_effect_and_guard(PLACEMENT_SETTLE, |id| MercuryEvent::Timer(TimerFired(id)));
+        let (timer, effect) = timer_effect_and_guard(PLACEMENT_SETTLE, (), MercuryEvent::Timer);
         self.pending = Some(PendingPlacement {
             window: placement.window,
             timer,
@@ -555,8 +552,7 @@ impl Mercury {
         let content = self
             .layer
             .overlay_content(self.foreground.as_ref().map(|front| &front.app));
-        let (guard, effect) =
-            timer_effect_and_guard(OVERLAY_DWELL, |id| MercuryEvent::Timer(TimerFired(id)));
+        let (guard, effect) = timer_effect_and_guard(OVERLAY_DWELL, (), MercuryEvent::Timer);
         self.overlay = Some(guard);
         vec![
             MercuryEffect::ShowOverlay(content),

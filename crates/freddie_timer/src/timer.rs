@@ -7,8 +7,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use bind::EventTrigger;
 use tokio::sync::oneshot;
+
+#[cfg(feature = "bind")]
+use bind::EventTrigger;
 
 use crate::AlwaysEqual;
 use crate::drop_guard::{DropGuard, drop_guard};
@@ -48,45 +50,60 @@ pub struct TimerGuard {
 impl TimerGuard {
     /// The trigger matching this timer's own firing, and no other.
     #[must_use]
+    #[cfg(feature = "bind")]
     pub const fn trigger(&self) -> TimerTrigger {
         TimerTrigger(self.id)
     }
 }
 
-/// A timer fired, carrying which timer it was.
+/// A timer fired, carrying which timer it was and the payload it was armed with.
 ///
-/// One event for every timer a consumer owns. What tells them apart at dispatch is which node is
-/// still holding that guard, not which type the event is.
-#[derive(Debug)]
-pub struct TimerFired(pub TimerId);
+/// `id` and `payload` are private. The payload is readable only through
+/// [`trigger_if_matching`](Self::trigger_if_matching).
+#[derive(Clone, Copy, Debug)]
+pub struct TimerFired<P = ()> {
+    id: TimerId,
+    payload: P,
+}
+
+impl<P> TimerFired<P> {
+    /// The payload if `guard` is still the one this firing was armed with.
+    pub fn trigger_if_matching<'a>(&'a self, guard: Option<&TimerGuard>) -> Option<&'a P> {
+        guard
+            .is_some_and(|guard| guard.id == self.id)
+            .then_some(&self.payload)
+    }
+}
 
 /// Two firings compare equal under `testing` whatever their ids.
 ///
 /// The id exists to tell one timer from another at dispatch. A test that rebuilds an expected
 /// effect cannot know it, and asserting it would only assert that the counter ran; with one event
 /// type for every timer, the delay is what distinguishes an effect anyway. A test that cares about
-/// an id reads it off the effect a transition produced.
+/// a firing uses the event on the effect that set the timer, or [`TimerFired::trigger_if_matching`].
 #[cfg(feature = "testing")]
-impl PartialEq for TimerFired {
+impl<P> PartialEq for TimerFired<P> {
     fn eq(&self, _other: &Self) -> bool {
         true
     }
 }
 
 #[cfg(feature = "testing")]
-impl Eq for TimerFired {}
+impl<P> Eq for TimerFired<P> {}
 
 /// Matches only the firing of the timer it was built from.
 ///
 /// Its value comes from the guard the bound node holds, so a binding written with it fires for its
 /// own timer and nothing else.
+#[cfg(feature = "bind")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TimerTrigger(TimerId);
 
+#[cfg(feature = "bind")]
 impl EventTrigger for TimerTrigger {
     type Event = TimerFired;
     fn is_matching(&self, ev: &TimerFired) -> bool {
-        self.0 == ev.0
+        self.0 == ev.id
     }
 }
 
@@ -106,11 +123,12 @@ pub struct TimerEffect<E> {
 
 /// Build a linked guard and event that fires after `delay`. Dropping the guard cancels the timer.
 ///
-/// `event` is handed the id identifying this timer, so the event it builds carries it and the
-/// binding that wants it can match on the guard still held.
-pub fn timer_effect_and_guard<E>(
+/// `payload` is stored on the [`TimerFired`] the `event` constructor receives. The payload is
+/// readable later only through [`TimerFired::trigger_if_matching`].
+pub fn timer_effect_and_guard<P, E>(
     delay: Duration,
-    event: impl FnOnce(TimerId) -> E,
+    payload: P,
+    event: impl FnOnce(TimerFired<P>) -> E,
 ) -> (TimerGuard, TimerEffect<E>) {
     let (guard, receiver) = drop_guard();
     let id = TimerId::mint();
@@ -118,7 +136,7 @@ pub fn timer_effect_and_guard<E>(
         TimerGuard { id, guard },
         TimerEffect {
             delay,
-            event: event(id),
+            event: event(TimerFired { id, payload }),
             cancel: AlwaysEqual(receiver),
         },
     )

@@ -85,6 +85,7 @@ pub(crate) fn record_focus_read<'x>(
 
 /// The placement mercury asked for has had its time: whatever the window has done since,
 /// what it does next is the user's.
+#[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn placement_settled<'x>(
     _ev: &TimerFired,
     _snap: (),

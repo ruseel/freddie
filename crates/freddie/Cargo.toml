@@ -9,12 +9,12 @@ repository.workspace = true
 [dependencies]
 bind = { path = "../bind", version = "0.0.1", default-features = false }
 freddie_keys = { path = "../freddie_keys", version = "0.0.1" }
-tokio = { version = "1", features = ["sync"] }
+freddie_timer = { path = "../freddie_timer", version = "0.0.1", features = ["bind"] }
 
 [features]
 # Test-only equality: `AlwaysEqual` compares equal only under this, so it stays out of the
 # normal build.
-testing = []
+testing = ["freddie_timer/testing"]
 
 [lints]
 workspace = true
