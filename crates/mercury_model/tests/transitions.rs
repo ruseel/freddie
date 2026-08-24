@@ -30,16 +30,14 @@ fn front(m: &Mercury) -> Option<App> {
 // that schedules it. Equality under `testing` compares the delay and fire event, so a rebuilt one
 // matches what a layer produced.
 fn return_home_timer() -> MercuryEffect {
-    let (_guard, effect) =
-        freddie::timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, (), MercuryEvent::Timer);
+    let (_guard, effect) = freddie::timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, ());
     MercuryEffect::Timer(effect)
 }
 
 // A placement arms the settle wait; this is the effect that schedules it. It bounds how long a
 // move reported for that window counts as mercury's own rather than the user's.
 fn settle_timer() -> MercuryEffect {
-    let (_guard, effect) =
-        freddie::timer_effect_and_guard(PLACEMENT_SETTLE, (), MercuryEvent::Timer);
+    let (_guard, effect) = freddie::timer_effect_and_guard(PLACEMENT_SETTLE, ());
     MercuryEffect::Timer(effect)
 }
 
@@ -47,10 +45,7 @@ fn timer_event(effects: &[MercuryEffect]) -> MercuryEvent {
     effects
         .iter()
         .find_map(|e| match e {
-            MercuryEffect::Timer(timer) => match &timer.event {
-                MercuryEvent::Timer(fired) => Some(MercuryEvent::Timer(*fired)),
-                _ => None,
-            },
+            MercuryEffect::Timer(timer) => Some(MercuryEvent::Timer(timer.event)),
             _ => None,
         })
         .expect("these effects set a timer")
@@ -1214,7 +1209,7 @@ fn inapp_follows_the_front_app_across_a_switch() {
 // Opening a run arms its window; this is the effect that schedules it. Equality under `testing`
 // compares the delay and the fire event, so a rebuilt one matches what the run produced.
 fn jk_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(JK_TIMEOUT, (), MercuryEvent::Timer);
+    let (_guard, effect) = freddie::timer_effect_and_guard(JK_TIMEOUT, ());
     MercuryEffect::Timer(effect)
 }
 
@@ -1455,7 +1450,7 @@ fn the_window_is_armed_once_per_run_not_once_per_key() {
 // The effect `o` produces beside the text: the overlay's hide timer. Equality under `testing`
 // compares the delay and the fire event, and a firing compares equal whatever its id.
 fn overlay_hide_timer() -> MercuryEffect {
-    let (_guard, effect) = freddie::timer_effect_and_guard(OVERLAY_DWELL, (), MercuryEvent::Timer);
+    let (_guard, effect) = freddie::timer_effect_and_guard(OVERLAY_DWELL, ());
     MercuryEffect::Timer(effect)
 }
 

@@ -107,36 +107,36 @@ impl EventTrigger for TimerTrigger {
     }
 }
 
-/// The scheduling half: a delay, the event to fire, and the cancel channel.
+/// The scheduling half: a delay, the firing to post, and the cancel channel.
 ///
 /// A handler returns it as an effect and the effect loop pattern-matches it to schedule. It owns
-/// the event and the receiver, so it is used once. The receiver sits in `AlwaysEqual`, so the
-/// effect's `testing` equality is the delay and the event; the effect, not the guard, carries the
+/// the firing and the receiver, so it is used once. The receiver sits in `AlwaysEqual`, so the
+/// effect's `testing` equality is the delay and the firing; the effect, not the guard, carries the
 /// testing concern.
+///
+/// `P` is the same parameter as [`TimerFired`]. The consumer's event enum is not this type: the
+/// effect loop wraps `event` as `Event::Timer(event)` when it posts.
 #[cfg_attr(feature = "testing", derive(PartialEq, Eq))]
 #[derive(Debug)]
-pub struct TimerEffect<E> {
+pub struct TimerEffect<P = ()> {
     pub delay: Duration,
-    pub event: E,
+    pub event: TimerFired<P>,
     pub cancel: AlwaysEqual<oneshot::Receiver<()>>,
 }
 
-/// Build a linked guard and event that fires after `delay`. Dropping the guard cancels the timer.
+/// Build a linked guard and firing that completes after `delay`. Dropping the guard cancels the
+/// timer.
 ///
-/// `payload` is stored on the [`TimerFired`] the `event` constructor receives. The payload is
-/// readable later only through [`TimerFired::trigger_if_matching`].
-pub fn timer_effect_and_guard<P, E>(
-    delay: Duration,
-    payload: P,
-    event: impl FnOnce(TimerFired<P>) -> E,
-) -> (TimerGuard, TimerEffect<E>) {
+/// `payload` is stored on the [`TimerFired`] the effect carries. It is readable later only through
+/// [`TimerFired::trigger_if_matching`].
+pub fn timer_effect_and_guard<P>(delay: Duration, payload: P) -> (TimerGuard, TimerEffect<P>) {
     let (guard, receiver) = drop_guard();
     let id = TimerId::mint();
     (
         TimerGuard { id, guard },
         TimerEffect {
             delay,
-            event: event(TimerFired { id, payload }),
+            event: TimerFired { id, payload },
             cancel: AlwaysEqual(receiver),
         },
     )

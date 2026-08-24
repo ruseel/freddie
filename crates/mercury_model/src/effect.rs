@@ -7,8 +7,6 @@ use freddie::AlwaysEqual;
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::{Pid, Placement, WindowId};
 
-use crate::MercuryEvent;
-
 /// One key carrying its modifiers as flags, which is how Mercury writes a chord.
 ///
 /// `cmd`-`r` is `Chord { key: KeyR, flags: COMMAND }`: one key event with the modifier as a flag,
@@ -34,7 +32,7 @@ pub enum UrlPart {
 /// and it never mutates Mercury's state directly.
 // Effect equality is only ever asked for by the tests (dispatch never compares effects), so the
 // derive is gated behind `testing` and kept out of the normal build. `PartialEq` but not `Eq`,
-// because a timer carries a `MercuryEvent`, and a window event in one carries `f64` frames.
+// because a window event in one carries `f64` frames.
 #[cfg_attr(feature = "testing", derive(PartialEq))]
 #[derive(Debug)]
 pub enum MercuryEffect {
@@ -79,7 +77,7 @@ pub enum MercuryEffect {
     ShowLayer(&'static str),
     /// Arm a timer. The effect loop schedules it; it fires its event after the delay unless the
     /// guard held by the state that asked for it drops first.
-    Timer(TimerEffect<MercuryEvent>),
+    Timer(TimerEffect),
 }
 
 /// One effect iterates as itself, so a handler with a single thing to ask for returns it bare

@@ -50,7 +50,7 @@ pub const RETURN_TO_HOME_TIMEOUT: Duration = Duration::from_secs(10);
 /// schedules it. It fires after [`RETURN_TO_HOME_TIMEOUT`], and the layer that set it binds that
 /// firing home, matching on the guard it still holds.
 pub(crate) fn arm_return_home() -> (TimerGuard, MercuryEffect) {
-    let (guard, effect) = timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, (), MercuryEvent::Timer);
+    let (guard, effect) = timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, ());
     (guard, MercuryEffect::Timer(effect))
 }
 
@@ -372,7 +372,7 @@ impl Windows {
     /// callers need it; what they differ on is the remembered frame, which this leaves
     /// alone.
     fn asking_for(&mut self, placement: Placement) -> Vec<MercuryEffect> {
-        let (timer, effect) = timer_effect_and_guard(PLACEMENT_SETTLE, (), MercuryEvent::Timer);
+        let (timer, effect) = timer_effect_and_guard(PLACEMENT_SETTLE, ());
         self.pending = Some(PendingPlacement {
             window: placement.window,
             timer,
@@ -552,7 +552,7 @@ impl Mercury {
         let content = self
             .layer
             .overlay_content(self.foreground.as_ref().map(|front| &front.app));
-        let (guard, effect) = timer_effect_and_guard(OVERLAY_DWELL, (), MercuryEvent::Timer);
+        let (guard, effect) = timer_effect_and_guard(OVERLAY_DWELL, ());
         self.overlay = Some(guard);
         vec![
             MercuryEffect::ShowOverlay(content),

@@ -423,7 +423,7 @@ fn perform_effect(
 ///
 /// Fire-and-forget on the runtime, like `foreground_app` and `place_window`, so a pending sleep
 /// runs off the effect loop.
-fn schedule_timer(timer: TimerEffect<MercuryEvent>, event_tx: &UnboundedSender<MercuryEvent>) {
+fn schedule_timer(timer: TimerEffect, event_tx: &UnboundedSender<MercuryEvent>) {
     let TimerEffect {
         delay,
         event,
@@ -437,7 +437,7 @@ fn schedule_timer(timer: TimerEffect<MercuryEvent>, event_tx: &UnboundedSender<M
     let event_tx = event_tx.clone();
     tokio::spawn(async move {
         tokio::select! {
-            () = tokio::time::sleep(delay) => { let _ = event_tx.send(event); }
+            () = tokio::time::sleep(delay) => { let _ = event_tx.send(MercuryEvent::Timer(event)); }
             _ = cancel => {}
         }
     });

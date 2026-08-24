@@ -6,7 +6,7 @@ use freddie_keys::Key;
 
 #[allow(clippy::wildcard_imports)]
 use crate::handlers::*;
-use crate::{AnyKey, MercuryEffect, MercuryEvent, MercuryStruct};
+use crate::{AnyKey, MercuryEffect, MercuryStruct};
 
 use super::LayerPath;
 
@@ -28,7 +28,7 @@ pub const JK_TIMEOUT: Duration = Duration::from_millis(200);
 ///
 /// `pub(crate)` because the handler that calls it is not a child of this module.
 pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
-    let (guard, effect) = timer_effect_and_guard(window, (), MercuryEvent::Timer);
+    let (guard, effect) = timer_effect_and_guard(window, ());
     (guard, MercuryEffect::Timer(effect))
 }
 
