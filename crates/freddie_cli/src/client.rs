@@ -146,7 +146,7 @@ impl fmt::Display for Failure {
 /// `info!` is the answer and reaches stdout, `warn!` and above are the problem and reach stderr,
 /// and `debug!` is what it did along the way, which only the file keeps. Narrating here at `info!`
 /// would print three lines where the verb has one thing to say.
-fn stop_daemon(instance: &Instance, signal: Signal) -> Result<Option<Pid>, Failure> {
+fn stop_daemon<TApp: App>(instance: &Instance, signal: Signal) -> Result<Option<Pid>, Failure> {
     let pid = match find_daemon(instance) {
         Ok(Target::Running(pid)) => pid,
         Ok(Target::NotRunning) => return Ok(None),
@@ -161,8 +161,29 @@ fn stop_daemon(instance: &Instance, signal: Signal) -> Result<Option<Pid>, Failu
     };
     // Before the signal, so the wait cannot miss a daemon that exits between the two.
     let freed = watch_for_free(instance);
-    debug!(daemon = %pid, ?signal, "signalling the daemon");
-    if let Err(error) = signal_pid(pid, signal) {
+    debug!(app = TApp::NAME, daemon = %pid, ?signal, "signalling the daemon");
+    if let Err(error) = match signal {
+        Signal::Kill => {
+            #[cfg(unix)]
+            {
+                signal_pid(pid, Signal::Kill)
+            }
+            #[cfg(windows)]
+            {
+                kill_pid(pid)
+            }
+        }
+        Signal::Terminate => {
+            #[cfg(unix)]
+            {
+                signal_pid(pid, Signal::Terminate)
+            }
+            #[cfg(windows)]
+            {
+                TApp::ask_to_quit(instance).map_err(io::Error::other)
+            }
+        }
+    } {
         debug!(daemon = %pid, %error, "could not signal the daemon");
         return Err(Failure::Unsignalable(SignalFailure { pid, error }));
     }
@@ -179,7 +200,7 @@ fn stop_daemon(instance: &Instance, signal: Signal) -> Result<Option<Pid>, Failu
 ///
 /// Exits 0 when there was nothing to stop, so calling this twice, or in a teardown script that
 /// does not know the state, is not an error.
-pub(crate) fn stop(instance: &Instance, force: bool) -> ExitCode {
+pub(crate) fn stop<TApp: App>(instance: &Instance, force: bool) -> ExitCode {
     // Before looking for anything, so a stop that found nothing running still leaves a record that
     // somebody asked. `debug!` rather than `info!`: it is an action, not the verb's answer, and the
     // answer should be the only thing the terminal shows.
@@ -189,7 +210,7 @@ pub(crate) fn stop(instance: &Instance, force: bool) -> ExitCode {
     } else {
         Signal::Terminate
     };
-    match stop_daemon(instance, signal) {
+    match stop_daemon::<TApp>(instance, signal) {
         Ok(Some(pid)) => {
             info!("{} stopped (pid {pid})", instance.display_name());
             ExitCode::SUCCESS
@@ -390,7 +411,7 @@ pub(crate) fn restart<TApp: App>(
     } else {
         Signal::Terminate
     };
-    match stop_daemon(instance, signal) {
+    match stop_daemon::<TApp>(instance, signal) {
         Ok(Some(pid)) => info!("{} stopped (pid {pid})", instance.display_name()),
         Ok(None) => debug!("nothing was running to stop"),
         Err(failure) => {
@@ -759,17 +780,12 @@ fn signal_pid(pid: Pid, signal: Signal) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn signal_pid(pid: Pid, signal: Signal) -> io::Result<()> {
-    match signal {
-        // `taskkill /F` terminates the process, which is SIGKILL. `taskkill` without it posts
-        // WM_CLOSE, which a daemon with no window never sees, so there is no gentle taskkill.
-        Signal::Kill => ran(Command::new("taskkill")
-            .args(["/F", "/PID"])
-            .arg(pid.to_string())),
-        Signal::Terminate => Err(io::Error::other(
-            "graceful stop is not yet available on Windows; use --force",
-        )),
-    }
+fn kill_pid(pid: Pid) -> io::Result<()> {
+    // `taskkill /F` terminates the process, which is SIGKILL. `taskkill` without it posts
+    // WM_CLOSE, which a daemon with no window never sees, so there is no gentle taskkill.
+    ran(Command::new("taskkill")
+        .args(["/F", "/PID"])
+        .arg(pid.to_string()))
 }
 
 /// Run `command` to completion, turning a non-zero exit into an error.
@@ -788,6 +804,10 @@ fn ran(command: &mut Command) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{LogsView, Record, format_duration, format_timestamp, show};
+    #[cfg(windows)]
+    use crate::{App, Instance};
+    #[cfg(windows)]
+    use std::io;
     use tracing::Level;
 
     const DISPATCH: &str = r#"{"pid":1,"timestamp":"2026-07-21T09:14:02.114Z","level":"INFO","message":"dispatch","event":"Key(KeyR)","effects":"[]","state":"Mercury { .. }","target":"mercury::daemon"}"#;
@@ -867,5 +887,90 @@ mod tests {
             serde_json::from_str::<Record>("Boot-out failed: 36: Operation now in progress")
                 .is_err()
         );
+    }
+
+    #[cfg(windows)]
+    struct Silent;
+
+    #[cfg(windows)]
+    impl App for Silent {
+        type Id = crate::NoArgs;
+        type DaemonArgs = crate::NoArgs;
+        const NAME: &'static str = "silent";
+        fn instance(
+            _: &crate::NoArgs,
+        ) -> Result<Instance, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Instance::global(Self::NAME)?)
+        }
+        fn run_daemon(_: &crate::NoArgs, _: &crate::NoArgs) {}
+    }
+
+    #[cfg(windows)]
+    struct Posts;
+
+    #[cfg(windows)]
+    impl App for Posts {
+        type Id = crate::NoArgs;
+        type DaemonArgs = crate::NoArgs;
+        const NAME: &'static str = "posts";
+        fn instance(
+            _: &crate::NoArgs,
+        ) -> Result<Instance, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Instance::global(Self::NAME)?)
+        }
+        fn run_daemon(_: &crate::NoArgs, _: &crate::NoArgs) {}
+        #[cfg(windows)]
+        fn ask_to_quit(_: &Instance) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Ok(())
+        }
+    }
+
+    #[cfg(windows)]
+    struct Fails;
+
+    #[cfg(windows)]
+    impl App for Fails {
+        type Id = crate::NoArgs;
+        type DaemonArgs = crate::NoArgs;
+        const NAME: &'static str = "fails";
+        fn instance(
+            _: &crate::NoArgs,
+        ) -> Result<Instance, Box<dyn std::error::Error + Send + Sync>> {
+            Ok(Instance::global(Self::NAME)?)
+        }
+        fn run_daemon(_: &crate::NoArgs, _: &crate::NoArgs) {}
+        #[cfg(windows)]
+        fn ask_to_quit(_: &Instance) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            Err("no port".into())
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn default_ask_to_quit_is_the_windows_error() {
+        let instance = Silent::instance(&crate::NoArgs).expect("a test can name an instance");
+        let err = Silent::ask_to_quit(&instance).expect_err("the default cannot ask");
+        assert!(
+            err.to_string()
+                .contains("graceful stop is not yet available on Windows; use --force"),
+            "{err}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_ok_ask_to_quit_is_ok() {
+        let instance = Posts::instance(&crate::NoArgs).expect("a test can name an instance");
+        Posts::ask_to_quit(&instance).expect("posted");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_failed_ask_to_quit_is_the_app_error() {
+        let instance = Fails::instance(&crate::NoArgs).expect("a test can name an instance");
+        let err = Fails::ask_to_quit(&instance).expect_err("the app failed the ask");
+        assert!(err.to_string().contains("no port"), "{err}");
+        let mapped = io::Error::other(err);
+        assert!(mapped.to_string().contains("no port"), "{mapped}");
     }
 }

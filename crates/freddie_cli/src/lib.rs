@@ -87,6 +87,21 @@ pub trait App {
     /// never reaches here and exits nonzero on its own, which leaves it the only outcome worth
     /// starting the daemon again for.
     fn run_daemon(id: &Self::Id, args: &Self::DaemonArgs);
+
+    /// Ask the running daemon to quit. Windows only.
+    ///
+    /// [`stop`](Verb::Stop) without `--force` is SIGTERM on unix. Windows has none: `taskkill`
+    /// without `/F` posts `WM_CLOSE`, which a daemon with no window never sees. This is that
+    /// ask. Freddie still finds the pid, still waits on the lock, still prints `stopped`.
+    ///
+    /// Takes [`Instance`], not [`Id`](Self::Id). `stop` has already resolved the daemon; a
+    /// second [`instance`](Self::instance) would rediscover it.
+    ///
+    /// The default is today's Windows error. An app that can reach its daemon overrides.
+    #[cfg(windows)]
+    fn ask_to_quit(_instance: &Instance) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err("graceful stop is not yet available on Windows; use --force".into())
+    }
 }
 
 /// The daemon flags, or the id, of an app that has none.
@@ -139,7 +154,7 @@ fn run_verb_on<TApp: App>(verb: Verb<TApp>, instance: &Instance, typed: TypedArg
                 json: args.json,
             },
         ),
-        Verb::Stop(args) => client::stop(instance, args.force),
+        Verb::Stop(args) => client::stop::<TApp>(instance, args.force),
         Verb::Daemon(args) => {
             daemon::run_in_foreground::<TApp>(instance, &args);
             ExitCode::SUCCESS
