@@ -22,6 +22,21 @@ pub struct HeldGeneration(u64);
 #[derive(Debug)]
 pub struct RidingGeneration(u64);
 
+/// Two riding halves compare equal under `testing` whatever their ids.
+///
+/// The id exists to pair a read with its placeholder at [`Synced::commit`]. A test that
+/// rebuilds an expected effect cannot know it. A test that cares about a landing uses the
+/// generation on the effect that requested the read.
+#[cfg(feature = "testing")]
+impl PartialEq for RidingGeneration {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+#[cfg(feature = "testing")]
+impl Eq for RidingGeneration {}
+
 /// The model's generation mint: a counter on the root, so minting is a function of state — the
 /// same shape as timer-guard creation, the model's one sanctioned impurity.
 ///

@@ -12,8 +12,7 @@ freddie_keys = { path = "../freddie_keys", version = "0.0.1" }
 freddie_timer = { path = "../freddie_timer", version = "0.0.1", features = ["bind"] }
 
 [features]
-# Test-only equality: `AlwaysEqual` compares equal only under this, so it stays out of the
-# normal build.
+# Test-only equality on timer firings and effects, so it stays out of the normal build.
 testing = ["freddie_timer/testing"]
 
 [lints]

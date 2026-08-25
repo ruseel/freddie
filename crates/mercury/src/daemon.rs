@@ -393,14 +393,14 @@ fn perform_effect(
             let event_tx = event_tx.clone();
             std::thread::spawn(move || {
                 let frame = freddie_windows::frame_of(window);
-                let _ = event_tx.send(frame_read(window, generation.0, frame));
+                let _ = event_tx.send(frame_read(window, generation, frame));
             });
         }
         MercuryEffect::ReadFocus { pid, generation } => {
             let event_tx = event_tx.clone();
             std::thread::spawn(move || {
                 let window = freddie_windows::focused_window_of(pid);
-                let _ = event_tx.send(focus_read(pid, generation.0, window));
+                let _ = event_tx.send(focus_read(pid, generation, window));
             });
         }
         MercuryEffect::Copy(what) => copy(what),

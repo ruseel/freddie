@@ -9,7 +9,7 @@ use std::fmt;
 use std::time::Duration;
 
 use bind::{Bind, if_not_invalidated};
-use freddie::{AlwaysEqual, TimerGuard, timer_effect_and_guard};
+use freddie::{TimerGuard, timer_effect_and_guard};
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
 use freddie_sync::{GenerationMinter, HeldGeneration, RidingGeneration, Synced};
 use freddie_windows_types::{Frame, Monitor, Pid, Placement, WindowId};
@@ -761,7 +761,7 @@ pub const fn frame_read(
 ) -> MercuryEvent {
     MercuryEvent::FrameRead(crate::FrameRead {
         window,
-        generation: AlwaysEqual(generation),
+        generation,
         frame,
     })
 }
@@ -775,7 +775,7 @@ pub const fn focus_read(
 ) -> MercuryEvent {
     MercuryEvent::FocusRead(crate::FocusRead {
         pid,
-        generation: AlwaysEqual(generation),
+        generation,
         window,
     })
 }

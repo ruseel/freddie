@@ -5,7 +5,6 @@ use laserbeam::{Completed, CompletesTo};
 
 use crate::state::MercuryPath;
 use crate::{FocusRead, FrameRead, MercuryEffect, WindowEvent};
-use freddie::AlwaysEqual;
 use freddie_windows_types::WindowChange;
 
 /// A window fact: record what died, and request the read that fills it, the riding half in
@@ -22,7 +21,7 @@ pub(crate) fn record_windows<'x>(
             root.windows.opened(*window, held);
             vec![MercuryEffect::ReadFrame {
                 window: *window,
-                generation: AlwaysEqual(riding),
+                generation: riding,
             }]
         }
         WindowChange::Moved(window) | WindowChange::Resized(window) => {
@@ -30,7 +29,7 @@ pub(crate) fn record_windows<'x>(
             if root.windows.frame_change(*window, held) {
                 vec![MercuryEffect::ReadFrame {
                     window: *window,
-                    generation: AlwaysEqual(riding),
+                    generation: riding,
                 }]
             } else {
                 Vec::new()
@@ -41,7 +40,7 @@ pub(crate) fn record_windows<'x>(
             root.windows.focus_change(*pid, held);
             vec![MercuryEffect::ReadFocus {
                 pid: *pid,
-                generation: AlwaysEqual(riding),
+                generation: riding,
             }]
         }
         WindowChange::Closed(window) => {
@@ -67,8 +66,7 @@ pub(crate) fn record_frame_read<'x>(
     p: MercuryPath<'x>,
 ) -> (Vec<MercuryEffect>, Completed<MercuryPath<'x>>) {
     let root: MercuryPath<'x> = p;
-    root.windows
-        .frame_read(ev.window, &ev.generation.0, ev.frame);
+    root.windows.frame_read(ev.window, &ev.generation, ev.frame);
     (Vec::new(), root.complete())
 }
 
@@ -79,7 +77,7 @@ pub(crate) fn record_focus_read<'x>(
     p: MercuryPath<'x>,
 ) -> (Vec<MercuryEffect>, Completed<MercuryPath<'x>>) {
     let root: MercuryPath<'x> = p;
-    root.windows.focus_read(ev.pid, &ev.generation.0, ev.window);
+    root.windows.focus_read(ev.pid, &ev.generation, ev.window);
     (Vec::new(), root.complete())
 }
 

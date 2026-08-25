@@ -3,7 +3,6 @@
 use freddie::TimerEffect;
 use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, PressType};
 
-use freddie::AlwaysEqual;
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::{Pid, Placement, WindowId};
 
@@ -51,17 +50,16 @@ pub enum MercuryEffect {
     /// like. The handler that produced this read all of it out of the model.
     SetFrame(Placement),
     /// Read `window`'s frame off the effect loop; the answer returns as a
-    /// [`FrameRead`](crate::FrameRead) carrying this half. `AlwaysEqual` because
-    /// `RidingGeneration` is not comparable and tests compare effects.
+    /// [`FrameRead`](crate::FrameRead) carrying this half.
     ReadFrame {
         window: WindowId,
-        generation: AlwaysEqual<RidingGeneration>,
+        generation: RidingGeneration,
     },
     /// Read `pid`'s focused window; the answer returns as a
     /// [`FocusRead`](crate::FocusRead) carrying this half.
     ReadFocus {
         pid: Pid,
-        generation: AlwaysEqual<RidingGeneration>,
+        generation: RidingGeneration,
     },
     /// Put text on the clipboard, replacing what is there.
     Copy(String),

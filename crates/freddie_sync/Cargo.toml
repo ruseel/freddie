@@ -6,5 +6,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Test-only equality on RidingGeneration, so a type that carries one can derive PartialEq
+# under testing. Production has no PartialEq: the token is not comparable.
+testing = []
+
 [lints]
 workspace = true

@@ -1641,7 +1641,7 @@ const fn windows(change: WindowChange) -> MercuryEvent {
 fn land_frames(m: &mut Mercury, fx: Vec<MercuryEffect>, frame: Option<Frame>) {
     for effect in fx {
         if let MercuryEffect::ReadFrame { window, generation } = effect {
-            let _ = m.handle(&frame_read(window, generation.0, frame));
+            let _ = m.handle(&frame_read(window, generation, frame));
         }
     }
 }
@@ -1657,7 +1657,7 @@ fn focus_lands(m: &mut Mercury, pid: Pid, window: Option<WindowId>) {
     let fx = m.handle(&windows(WindowChange::FocusChanged(pid)));
     for effect in fx {
         if let MercuryEffect::ReadFocus { pid, generation } = effect {
-            let _ = m.handle(&focus_read(pid, generation.0, window));
+            let _ = m.handle(&focus_read(pid, generation, window));
         }
     }
 }

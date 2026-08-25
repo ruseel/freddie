@@ -1,7 +1,6 @@
 //! The event sources: a keyboard, and the OS reporting a newly foregrounded app.
 
 use bind::EventTrigger;
-use freddie::AlwaysEqual;
 use freddie_keys::KeyEvent;
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::WindowChange;
@@ -71,7 +70,7 @@ pub struct FrameLanded;
 #[derive(Debug)]
 pub struct FrameRead {
     pub window: WindowId,
-    pub generation: AlwaysEqual<RidingGeneration>,
+    pub generation: RidingGeneration,
     /// `None` when the read could not answer; the entry stays `Pending`.
     pub frame: Option<Frame>,
 }
@@ -92,7 +91,7 @@ pub struct FocusLanded;
 #[derive(Debug)]
 pub struct FocusRead {
     pub pid: Pid,
-    pub generation: AlwaysEqual<RidingGeneration>,
+    pub generation: RidingGeneration,
     pub window: Option<WindowId>,
 }
 impl EventTrigger for FocusLanded {

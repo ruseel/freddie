@@ -19,7 +19,7 @@ derive_more = { version = "2", features = ["from", "try_into"] }
 # Derives the tests need and the normal build does not: effect equality, for asserting what a
 # dispatch produced. Turned on for this crate's own tests through the self dev-dependency below,
 # and kept out of `cargo build` by resolver 3.
-testing = ["freddie/testing"]
+testing = ["freddie/testing", "freddie_sync/testing"]
 
 [dev-dependencies]
 # Turns the check on for TESTS only. With resolver 3 a dev-dependency's features do not leak

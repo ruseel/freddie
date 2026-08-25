@@ -3,7 +3,7 @@
 pub mod sequence;
 
 pub use freddie_timer::{
-    AlwaysEqual, DropGuard, TimerEffect, TimerFired, TimerGuard, TimerId, TimerTrigger, drop_guard,
+    DropGuard, TimerEffect, TimerFired, TimerGuard, TimerId, TimerTrigger, drop_guard,
     timer_effect_and_guard,
 };
 pub use sequence::{KeySequence, KeySequenceOutcome};
