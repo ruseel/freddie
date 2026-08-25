@@ -51,9 +51,8 @@ pub enum MercuryEffect {
     /// like. The handler that produced this read all of it out of the model.
     SetFrame(Placement),
     /// Read `window`'s frame off the effect loop; the answer returns as a
-    /// [`FrameRead`](crate::FrameRead) carrying this half. `AlwaysEqual` for the same reason
-    /// a timer's cancel receiver wears it: the tests compare effects, and a token has no
-    /// equality to offer.
+    /// [`FrameRead`](crate::FrameRead) carrying this half. `AlwaysEqual` because
+    /// `RidingGeneration` is not comparable and tests compare effects.
     ReadFrame {
         window: WindowId,
         generation: AlwaysEqual<RidingGeneration>,

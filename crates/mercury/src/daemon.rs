@@ -40,7 +40,7 @@
 use std::ops::ControlFlow;
 use std::time::Instant;
 
-use freddie::{AlwaysEqual, TimerEffect};
+use freddie::TimerEffect;
 use freddie_keyboard::Emitter;
 use freddie_overlay::OverlaySink;
 use freddie_windows::WindowSink;
@@ -427,7 +427,7 @@ fn schedule_timer(timer: TimerEffect, event_tx: &UnboundedSender<MercuryEvent>) 
     let TimerEffect {
         delay,
         event,
-        cancel: AlwaysEqual(mut cancel),
+        mut cancel,
     } = timer;
     // If the guard dropped before the loop reached this, the receiver is closed and the timer is
     // already cancelled, so there is nothing to spawn.

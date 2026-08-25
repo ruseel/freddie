@@ -12,7 +12,6 @@ use tokio::sync::oneshot;
 #[cfg(feature = "bind")]
 use bind::EventTrigger;
 
-use crate::AlwaysEqual;
 use crate::drop_guard::{DropGuard, drop_guard};
 
 /// Identifies one timer.
@@ -110,19 +109,28 @@ impl EventTrigger for TimerTrigger {
 /// The scheduling half: a delay, the firing to post, and the cancel channel.
 ///
 /// A handler returns it as an effect and the effect loop pattern-matches it to schedule. It owns
-/// the firing and the receiver, so it is used once. The receiver sits in `AlwaysEqual`, so the
-/// effect's `testing` equality is the delay and the firing; the effect, not the guard, carries the
-/// testing concern.
+/// the firing and the receiver, so it is used once. Under `testing`, equality is the delay and the
+/// firing; the receiver is a channel handle, not data.
 ///
 /// `P` is the same parameter as [`TimerFired`]. The consumer's event enum is not this type: the
 /// effect loop wraps `event` as `Event::Timer(event)` when it posts.
-#[cfg_attr(feature = "testing", derive(PartialEq, Eq))]
 #[derive(Debug)]
 pub struct TimerEffect<P = ()> {
     pub delay: Duration,
     pub event: TimerFired<P>,
-    pub cancel: AlwaysEqual<oneshot::Receiver<()>>,
+    pub cancel: oneshot::Receiver<()>,
 }
+
+/// Two effects compare as their delay and firing. The cancel receiver is a handle, not data.
+#[cfg(feature = "testing")]
+impl<P> PartialEq for TimerEffect<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.delay == other.delay && self.event == other.event
+    }
+}
+
+#[cfg(feature = "testing")]
+impl<P> Eq for TimerEffect<P> {}
 
 /// Build a linked guard and firing that completes after `delay`. Dropping the guard cancels the
 /// timer.
@@ -137,7 +145,7 @@ pub fn timer_effect_and_guard<P>(delay: Duration, payload: P) -> (TimerGuard, Ti
         TimerEffect {
             delay,
             event: TimerFired { id, payload },
-            cancel: AlwaysEqual(receiver),
+            cancel: receiver,
         },
     )
 }

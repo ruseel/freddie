@@ -8,8 +8,8 @@ use tokio::sync::oneshot;
 /// overwrites it) closes the channel and wakes the paired receiver, so whatever waits on that
 /// receiver tears down at once.
 ///
-/// A pure RAII primitive: it knows nothing about testing equality. A consumer that needs a
-/// comparable effect wraps its own half in `AlwaysEqual` (see [`TimerEffect`](crate::TimerEffect)).
+/// A pure RAII primitive: it knows nothing about testing equality. [`TimerEffect`](crate::TimerEffect)
+/// compares delay and firing and leaves the receiver out.
 #[must_use = "dropping the guard cancels immediately"]
 pub struct DropGuard(
     // Held only to be dropped: dropping the sender wakes the paired receiver. Never read.
