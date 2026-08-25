@@ -10,13 +10,10 @@ use super::{AppLayerPath, MercuryPath, ReturnHomeLayersPath};
 
 pub(crate) const CHROME_OVERLAY: &str = include_str!("overlays/chrome.txt");
 pub(crate) const GHOSTTY_OVERLAY: &str = include_str!("overlays/ghostty.txt");
-/// For an app with no bindings of its own: the in-app layer's own keys and nothing more.
+/// Overlay for an app with no bindings of its own: the in-app layer's keys only.
 pub(crate) const INAPP_OVERLAY: &str = include_str!("overlays/inapp.txt");
 
-/// The keymap the overlay shows for the in-app layer while `app` is frontmost.
-///
-/// The in-app layer's bindings are the app's, so `i` in Ghostty and `i` in Chrome are different
-/// keymaps and showing one for the other would be worse than showing nothing.
+/// Overlay keymap for the in-app layer while `app` is frontmost.
 #[must_use]
 pub(crate) const fn overlay_for(app: App) -> &'static str {
     match app {
@@ -26,9 +23,7 @@ pub(crate) const fn overlay_for(app: App) -> &'static str {
     }
 }
 
-/// The in-app layer. It stores NO app: `root.foreground` is the only copy, and [`app_data`]
-/// builds the app's level from it on every dispatch. There is nothing to keep in sync and
-/// nothing to go stale.
+/// In-app layer. Stores no app; [`app_data`] builds the level from `root.foreground` on every dispatch.
 #[derive(Bind, Debug)]
 #[node(parent_path = ReturnHomeLayersPath)]
 #[binds(MercuryStruct)]
@@ -47,8 +42,7 @@ impl AppLayer {
     }
 }
 
-/// The app's level, which is not in the tree. Several possible levels, so the data is an enum;
-/// an app with no bindings is not a variant, and [`app_data`] returns `None` for it.
+/// Derived app level. An app with no bindings is not a variant; [`app_data`] returns `None`.
 #[derive(Bind, Debug)]
 #[derived_node(parent_path = AppLayerPath)]
 #[binds(MercuryStruct)]
@@ -57,11 +51,7 @@ pub enum AppData {
     Ghostty(GhosttyApp),
 }
 
-/// Reads the confirmed front app, the only copy, and builds the level for it.
-///
-/// A shared reference, so it cannot mutate: it derives, it does not act. `None` while a nav is in
-/// flight (the old app must not bind in the gap), and `Zed`/`Other` bind nothing, so all three get
-/// no level and no struct.
+/// Derived from the confirmed front app. `None` while a nav is in flight, and for apps with no bindings.
 fn app_data<'a, P: HasAncestor<MercuryPath<'a>>>(path: &P) -> Option<AppData> {
     let root = path.ancestor();
     match root.foreground.as_ref().map(|front| front.app.identity()) {
@@ -71,13 +61,10 @@ fn app_data<'a, P: HasAncestor<MercuryPath<'a>>>(path: &P) -> Option<AppData> {
     }
 }
 
-/// Chrome's level. A unit: mercury tracks nothing per Chrome app. It stops being one when it
-/// carries something (a tab name).
 #[derive(Bind, Debug)]
 #[derived_node(parent_path = AppLayerPath)]
 #[binds(MercuryStruct)]
-// `l` is bound at three modifier combinations, so all three are chords: a plain `KeyPress` ignores
-// the flags, and any two of these would then match the same event.
+// All three `l` binds are chords: a plain `KeyPress` ignores flags, so any two would match the same event.
 #[bind(
     Key::KeyR.down() => if_not_invalidated(tap_cmd_r),
     Key::KeyL.down().bare() => if_not_invalidated(and!(tap_cmd_l, enter_typing)),
@@ -93,7 +80,6 @@ impl ChromeApp {
     }
 }
 
-/// Ghostty's level, where `j` and `k` walk tmux's panes.
 #[derive(Bind, Debug)]
 #[derived_node(parent_path = AppLayerPath)]
 #[binds(MercuryStruct)]

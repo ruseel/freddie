@@ -1,21 +1,13 @@
-//! The schedule, end to end: the `A → B` demo from `invalidation.md`, plus the cases its two
-//! walks do not reach.
-//!
-//! `A` is the root and holds the layer `B`. `B` arms a return-home timer; every key while `B` is
-//! up pushes the deadline out; a leave has to cancel it, because the OS timer outlives the active
-//! path and `Drop` cannot emit the cancel. One post owns the whole deadline story by matching the
-//! state, and it is scheduled before the bind because it keys on what the descent did.
+//! Schedule over an `A -> B` tree. `B` arms a return-home timer; a leave has to cancel it because the OS timer outlives the active path and `Drop` cannot emit the cancel.
 
 use bind::{AscendState, Bind, Bindings, EventTrigger, and, dispatch, if_not_invalidated};
 use laserbeam::{Completed, CompletesTo, HasStop, IntoAncestor, MaybeInvalidated, PathMut};
-
-// ---- what the app owns: events, triggers, effects ----
 
 pub struct KeyEvent {
     pub key: &'static str,
 }
 
-/// Matches whatever key arrived, which is what a deadline post wants.
+/// Matches every key.
 pub struct AnyKey;
 impl EventTrigger for AnyKey {
     type Event = KeyEvent;
@@ -58,7 +50,7 @@ impl<'a> TryFrom<&'a DemoEvent> for &'a KeyEvent {
 pub struct TimerId(pub u64);
 
 impl TimerId {
-    /// The next id the OS would mint. Fixed here, so a walk can name it.
+    /// Fixed id so a walk can name it.
     const fn fresh() -> Self {
         Self(1)
     }
@@ -74,7 +66,6 @@ pub enum DemoEffect {
     ScheduleTimer(TimerId),
     CancelTimer(TimerId),
     FlashOverlay,
-    /// What state a witness post was handed, so a test can see the fold.
     SawStanding,
     SawInvalidated,
 }
@@ -90,13 +81,11 @@ const fn key(k: &'static str) -> DemoEvent {
     DemoEvent::Key(KeyEvent { key: k })
 }
 
-// ---- the demo tree ----
-
 #[derive(Bind)]
 #[node(root)]
 #[binds(M)]
-#[pre_post(AnyKey => (snap_return_home, return_home_deadline))] // opt_0
-#[bind(Key("esc") => flash)] // opt_1
+#[pre_post(AnyKey => (snap_return_home, return_home_deadline))]
+#[bind(Key("esc") => flash)]
 pub struct A {
     #[child]
     pub b: B,
@@ -113,8 +102,6 @@ pub struct B {
 pub type APath<'a> = &'a mut A;
 pub type BPath<'a> = PathMut<B, APath<'a>>;
 
-/// B's bind: go home. Depth-generic and branch-free, because what it means is that the dispatch
-/// ends at the root wherever the descent below it stopped.
 fn go_home<'x, P>(
     _ev: &KeyEvent,
     _snap: (),
@@ -128,8 +115,6 @@ where
     (vec![], st.state.into_ancestor::<APath<'x>>().complete())
 }
 
-/// B's other bind: replace the timer and stay. Only the pre-snap test fires it, to show that
-/// what the post cancels is the id that was live BEFORE the descent ran.
 fn bump_timer<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -144,7 +129,6 @@ fn bump_timer<'x>(
     }
 }
 
-/// A's bind.
 fn flash<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -153,13 +137,12 @@ fn flash<'x>(
     (vec![DemoEffect::FlashOverlay], st.complete())
 }
 
-/// A's pre: runs before descending into B, while the old timer id is live.
+/// Reads the timer id while B is still there.
 const fn snap_return_home(_ev: &KeyEvent, a: &APath<'_>) -> TimerId {
     a.b.return_home.id
 }
 
-/// A's post: the whole return-home deadline. B on the active path pushes the deadline out;
-/// invalidated, the snap is all that is left of the timer.
+/// Rearms while B is standing; cancels from the snap when invalidated.
 fn return_home_deadline<'x>(
     _ev: &KeyEvent,
     snapped: TimerId,
@@ -189,11 +172,6 @@ const fn demo(id: u64) -> A {
     }
 }
 
-// ---- the two walks ----
-
-/// `h`: B goes home. The claim is won at B and the leave peels past A, so A's post takes its
-/// invalidated arm and the snap is the only trace of the timer left to cancel. A's bind never
-/// fires: `esc` did not arrive, and the claim is gone besides.
 #[test]
 fn key_h_leaves_and_the_post_cancels_from_its_snap() {
     let mut a = demo(7);
@@ -208,8 +186,6 @@ fn key_h_leaves_and_the_post_cancels_from_its_snap() {
     );
 }
 
-/// Any other key: B stays, so the post pushes the deadline out. Nothing claimed, and the effects
-/// come back anyway, which is the whole reason dispatch stopped reporting them through the claim.
 #[test]
 fn an_unclaimed_key_still_rearms() {
     let mut a = demo(7);
@@ -223,7 +199,6 @@ fn an_unclaimed_key_still_rearms() {
     assert_eq!(a.b.return_home.id, TimerId(1), "the post rearmed it");
 }
 
-/// `esc`: the post runs on its own trigger, then the bind runs on its own, in source order.
 #[test]
 fn a_post_and_a_bind_both_run_in_source_order() {
     let mut a = demo(7);
@@ -237,8 +212,6 @@ fn a_post_and_a_bind_both_run_in_source_order() {
     );
 }
 
-/// The pre reads the state as it stood on the way down. `bump` replaces the timer during the
-/// descent, and the post still cancels the id the pre took before it.
 #[test]
 fn a_pre_snaps_before_the_descent_mutates() {
     let mut a = demo(7);
@@ -254,9 +227,6 @@ fn a_pre_snaps_before_the_descent_mutates() {
     assert_eq!(a.b.return_home.id, TimerId(1));
 }
 
-// ---- the claim trap door ----
-
-/// A key bound at two depths. Nothing bans it statically: the claim resolves it, deepest first.
 #[derive(Bind)]
 #[node(root)]
 #[binds(M)]
@@ -304,7 +274,6 @@ fn the_deepest_binding_takes_the_claim_and_the_ancestors_is_skipped() {
         "the child claimed, so the root's bind completed where it stood"
     );
 
-    // With the child's trigger absent, the same key reaches the root's bind instead.
     let mut trap = Trap {
         open: false,
         child: TrapChild,
@@ -315,20 +284,16 @@ fn the_deepest_binding_takes_the_claim_and_the_ancestors_is_skipped() {
     );
 }
 
-// ---- three levels: forwarding, and the fold after each item ----
-
 #[derive(Bind)]
 #[node(root)]
 #[binds(M)]
-#[post(AnyKey => witness)] // opt_0: sees what the descent did
-#[post(AnyKey => witness)] // opt_1: sees what opt_0 left
+#[post(AnyKey => witness)]
+#[post(AnyKey => witness)]
 pub struct Top {
     #[child]
     pub mid: Mid,
 }
 
-/// The middle node binds nothing, so a leave from the leaf passes straight through its
-/// `state.complete()` on the way to `Top`.
 #[derive(Bind)]
 #[node(parent_path = TopPath)]
 #[binds(M)]
@@ -342,7 +307,6 @@ pub struct Mid {
 #[binds(M)]
 #[bind(
     Key("go") => if_not_invalidated(leaf_home),
-    // One gesture, composed from its units at the bind site.
     Key("pair") => if_not_invalidated(and!(emits_flash, emits_cancel)),
     Key("nest") => if_not_invalidated(and!(emits_flash, emits_cancel, emits_flash)),
     Key("leave-then-look") => if_not_invalidated(and!(leaf_home, witness_leaf)),
@@ -353,7 +317,6 @@ pub type TopPath<'a> = &'a mut Top;
 pub type MidPath<'a> = PathMut<Mid, TopPath<'a>>;
 pub type LeafPath<'a> = PathMut<Leaf, MidPath<'a>>;
 
-/// Two effect-only units, distinguishable in the order they ran.
 fn emits_flash<P: HasStop + CompletesTo<P>>(
     _ev: &KeyEvent,
     _snap: (),
@@ -370,8 +333,6 @@ fn emits_cancel<P: HasStop + CompletesTo<P>>(
     (vec![DemoEffect::CancelTimer(TimerId(0))], p.complete())
 }
 
-/// A unit after a leave: it runs only if the chain is still standing, so its effect is the
-/// witness that `and` kept going.
 fn witness_leaf<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -380,7 +341,6 @@ fn witness_leaf<'x>(
     (vec![DemoEffect::SawStanding], p.complete())
 }
 
-/// The leaf's leave, the same shape `go_home` has on the demo tree: it ends at the root.
 fn leaf_home<'x, P>(_ev: &KeyEvent, _snap: (), p: P) -> (Vec<DemoEffect>, Completed<P>)
 where
     P: HasStop + IntoAncestor<TopPath<'x>>,
@@ -390,7 +350,6 @@ where
     (vec![], root.complete())
 }
 
-/// Reports which branch it was handed, and leaves the state exactly as it found it.
 fn witness<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -407,9 +366,6 @@ fn a_leave_forwards_through_a_node_that_binds_nothing() {
     let mut top = Top {
         mid: Mid { leaf: Leaf },
     };
-    // The leaf leaves for the root. `Mid` has nothing scheduled, so its state completes
-    // untouched, and `Top`'s first post sees the leave. The fold of what that post returned
-    // re-establishes the root as standing, which the second post reports.
     assert_eq!(
         dispatch::<M, Top, _>(&mut top, &key("go")),
         vec![DemoEffect::SawInvalidated, DemoEffect::SawStanding]
@@ -427,10 +383,6 @@ fn posts_run_without_a_claim_on_the_standing_branch() {
     );
 }
 
-// ---- and: one claim, effects in order, the second unit on the first's state ----
-
-/// The units' effects land in call order, ahead of the posts that run above them, and the whole
-/// composition takes the one claim rather than one per unit.
 #[test]
 fn and_concatenates_effects_in_order() {
     let mut top = Top {
@@ -441,15 +393,12 @@ fn and_concatenates_effects_in_order() {
         vec![
             DemoEffect::FlashOverlay,
             DemoEffect::CancelTimer(TimerId(0)),
-            // Top's two posts, which never claimed and ran anyway.
             DemoEffect::SawStanding,
             DemoEffect::SawStanding,
         ]
     );
 }
 
-/// `a` leaves, so the chain ends: `b` never runs on the node `a` destroyed, and only the
-/// enclosing dispatch's posts see the leave — gone at `Mid`, standing again at the root.
 #[test]
 fn a_leave_ends_the_chain() {
     let mut top = Top {
@@ -461,8 +410,6 @@ fn a_leave_ends_the_chain() {
     );
 }
 
-/// The flat form runs all three, in order, under the one claim, identically to the
-/// hand-nested `and(a, and(b, c))` it expands to.
 #[test]
 fn and_nests() {
     let mut top = Top {

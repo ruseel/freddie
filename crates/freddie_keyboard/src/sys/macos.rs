@@ -1,6 +1,4 @@
-//! The macOS backend, on `core-graphics`. The pure parts (the keycode table, the
-//! pass/remap/drop decision, the modifier flags) are unit-tested below; the tap
-//! and the posting are FFI that needs a real keyboard to exercise.
+//! The macOS backend, on `core-graphics`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -135,7 +133,6 @@ fn from_code(code: CGKeyCode) -> Key {
         .map_or(Key::Raw(code), |(key, _)| *key)
 }
 
-/// What the callback should do with a key.
 #[derive(PartialEq, Eq, Debug)]
 enum Decision {
     Pass,
@@ -143,7 +140,6 @@ enum Decision {
     Drop,
 }
 
-// The remap decision: what `on_key` returned against what came in.
 fn decide(input: &KeyEvent, out: Option<KeyEvent>) -> Decision {
     match out {
         None => Decision::Drop,
@@ -156,30 +152,27 @@ fn decide(input: &KeyEvent, out: Option<KeyEvent>) -> Decision {
 // The tap and the posting (FFI).
 // ---------------------------------------------------------------------------
 
-/// The marker an emitted event carries so the interceptor recognizes its own output.
+/// Marker an emitted event carries so the interceptor skips its own output.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Tag(i64);
 
 impl Tag {
-    /// Per-process random, so an interceptor skips only its own emitter's output.
+    /// Per-process random, so an interceptor skips only its own output.
     fn new() -> Self {
         let mut h = RandomState::new().build_hasher();
         h.write_u8(0);
         Self(i64::from_ne_bytes(h.finish().to_ne_bytes()))
     }
 
-    /// Marks `event` as this emitter's, so the tap passes it rather than handling it again.
     fn stamp(self, event: &CGEvent) {
         event.set_integer_value_field(EventField::EVENT_SOURCE_USER_DATA, self.0);
     }
 
-    /// Whether `event` carries this tag, and so came from this emitter.
     fn marks(self, event: &CGEvent) -> bool {
         event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA) == self.0
     }
 }
 
-/// Keycode from a keyboard event, if it fits in `u16`.
 fn keycode(event: &CGEvent) -> Option<CGKeyCode> {
     u16::try_from(event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)).ok()
 }
@@ -233,26 +226,17 @@ fn press_of_key(kind: CGEventType, key: Key, down: &FlagsChangedDown) -> Option<
     }
 }
 
-/// A keyboard event for `key`, carrying exactly `flags`, built from a long-lived private source.
+/// A keyboard event for `key`, carrying exactly `flags`, from a long-lived private source.
 ///
-/// `source` is the caller's private source for its thread: the emitter's, or the tap's remap
-/// source. Each `CGEventSourceCreate(Private)` maps about 16KB of shared memory that `CFRelease`
-/// never unmaps and no API reclaims, so a source per event grows the process by 16KB per
-/// keystroke for the life of the run. The source is passed in rather than built here.
-///
-/// The flags on the wire are `to_cg(flags) | intrinsic_flags(code)` and nothing else. The bits
-/// the event is born with are ignored, because posting through a source mutates it: an arrow
-/// leaves `NumericPad` in the source's state, and every event built from it afterwards is born
-/// carrying that bit. Reading those birth flags back would put `NumericPad` on a later
-/// `cmd`-`space`, which stops matching Spotlight's hotkey for the rest of the run.
-///
-/// Not a `NULL` source, which means the shared session state rather than no state, and so
-/// inherits bits other processes have left there.
+/// Each `CGEventSourceCreate(Private)` maps about 16KB that `CFRelease` never unmaps, so
+/// a source per event grows the process by 16KB per keystroke. The flags on the wire are
+/// `to_cg(flags) | intrinsic_flags(code)`: posting through a source mutates it (an arrow
+/// leaves `NumericPad` in the source), and reading birth flags back would put that bit on
+/// a later `cmd`-`space`. Not a `NULL` source, which inherits the shared session state.
 ///
 /// # Errors
 ///
-/// Returns [`EmitError::Unmappable`] if the key has no code on this OS, and [`EmitError::Post`]
-/// if the OS refused to build the event.
+/// [`EmitError::Unmappable`] if the key has no code, [`EmitError::Post`] if the OS refused.
 fn keyboard_event(
     source: &CGEventSource,
     key: Key,
@@ -266,10 +250,8 @@ fn keyboard_event(
         .map_err(|_| EmitError::Post)?;
     let intrinsic = intrinsic_flags(code);
     event.set_flags(to_cg(flags) | intrinsic);
-    // What actually goes on the wire, which the portable `KeyEvent` cannot show: the raw flag
-    // bits, the bits the keycode itself carries, and the type the OS chose from the keycode
-    // (`FlagsChanged` for a modifier, `KeyDown`/`KeyUp` otherwise). At `debug` so the log file
-    // keeps it, since two presses that dispatch identically can still post differently.
+    // Raw flag bits and OS event type. Two presses that dispatch identically can still post
+    // differently.
     tracing::debug!(
         ?key,
         ?press,
@@ -281,13 +263,12 @@ fn keyboard_event(
     Ok(event)
 }
 
-/// Grab the keyboard. The interceptor swallows and decides via `on_key`; the
-/// emitter synthesizes keys, tagged so the interceptor passes them.
+/// Grab the keyboard. The interceptor decides via `on_key`; the emitter synthesizes
+/// keys, tagged so the interceptor passes them.
 ///
 /// # Errors
 ///
-/// Returns [`CaptureError`] if the tap cannot be installed (usually missing
-/// Accessibility).
+/// [`CaptureError`] if the tap cannot be installed (usually missing Accessibility).
 pub fn intercept(
     on_key: impl Fn(KeyEvent) -> Option<KeyEvent> + Send + 'static,
 ) -> Result<(Interceptor, Emitter), CaptureError> {
@@ -295,14 +276,11 @@ pub fn intercept(
 }
 
 /// Same tap as [`intercept`], with per-key source device categorization.
-///
-/// `categorize` runs once per distinct HID source (and on every synthetic key for
-/// `None`). `on_key` receives the key and the categorized value `T`.
+/// `categorize` runs once per distinct HID source.
 ///
 /// # Errors
 ///
-/// Returns [`CaptureError`] if the tap cannot be installed (usually missing
-/// Accessibility).
+/// [`CaptureError`] if the tap cannot be installed.
 pub fn intercept_with_source<T, C, F>(
     mut categorize: C,
     on_key: F,
@@ -329,8 +307,7 @@ where
     })
 }
 
-/// Shared tap install. `on_key` already decided pass/remap/drop via its return.
-/// `event` is the live `CGEvent` for the key; only [`intercept_with_source`] reads it.
+/// Shared tap install. Only [`intercept_with_source`] reads the live `CGEvent`.
 fn run_tap(
     on_key: impl FnMut(KeyEvent, &CGEvent) -> Option<KeyEvent> + Send + 'static,
 ) -> Result<(Interceptor, Emitter), CaptureError> {
@@ -341,9 +318,7 @@ fn run_tap(
     let on_key = RefCell::new(on_key);
 
     let thread = std::thread::spawn(move || {
-        // The remap source, created once on this thread and borrowed by every remap. A source per
-        // remapped key would map 16KB of shared memory per key that nothing ever unmaps, and this
-        // one is never touched from another thread, which is what posting through a source needs.
+        // One remap source on this thread. A source per remapped key would map 16KB each.
         let Ok(remap_source) = CGEventSource::new(CGEventSourceStateID::Private) else {
             let _ = signal.send(Err(()));
             return;
@@ -379,7 +354,7 @@ fn run_tap(
                     flags: from_cg(event.get_flags()),
                 };
                 // Physical HID input is PID 0; a userspace `CGEventPost` (another app) is nonzero.
-                // Logged only. (Our own emits are tagged and returned above.)
+                // Logged only. Own emits are tagged and returned above.
                 let source_pid =
                     event.get_integer_value_field(EventField::EVENT_SOURCE_UNIX_PROCESS_ID);
                 tracing::debug!(?input, source_pid, "tap");
@@ -416,33 +391,23 @@ fn run_tap(
             thread: Some(thread),
         },
     };
-    // The emitter's own source, on the thread that will post through it. A failure here is a
-    // `CaptureError` like a tap that will not install: an emitter that cannot build an event has
-    // no working `emit`, and `run_tap` hands back both halves or neither.
+    // The emitter's source on the posting thread. Failure is a `CaptureError`: both halves
+    // or neither.
     let source = CGEventSource::new(CGEventSourceStateID::Private).map_err(|()| CaptureError)?;
     let emitter = Emitter { tag, source };
     Ok((interceptor, emitter))
 }
 
-/// An active grab of the keyboard. While it is alive keys are intercepted;
-/// dropping it releases the keyboard.
-///
-/// No `Drop` of its own: dropping it drops the [`TapThread`], which is what the release is.
+/// An active grab of the keyboard. Dropping it drops the [`TapThread`], which releases it.
 pub struct Interceptor {
     _tap: TapThread,
 }
 
-/// How long a dropped [`TapThread`] waits for the tap thread to finish before giving up on it.
-///
-/// Stopping the run loop is what ends that thread, and it ends promptly unless it is inside a slow
-/// `on_key`. Waiting forever would turn one wedged callback into a process that cannot exit, and
-/// this runs on the shutdown path and during unwinds.
+/// How long a dropped [`TapThread`] waits for the tap thread. Waiting forever would turn
+/// one wedged `on_key` into a process that cannot exit.
 const RELEASE_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// The thread the event tap runs on, and the run loop that ends it.
-///
-/// One resource in two parts: stopping the run loop is what makes the thread return, and joining is
-/// how the release finishes.
+/// The thread the event tap runs on. Stopping the run loop makes the thread return.
 struct TapThread {
     run_loop: CFRunLoop,
     thread: Option<JoinHandle<()>>,
@@ -468,16 +433,9 @@ impl Drop for TapThread {
     }
 }
 
-/// The keycodes a clean private source puts `NumericPad` on: the four arrows, and the keypad
-/// apart from `ANSI_KEYPAD_CLEAR` and `JIS_KEYPAD_COMMA`.
-///
-/// Measured, by building an event for every code from 0 to 127 on a clean private source and
-/// reading the bit back. `HOME`, `END`, `PAGE_UP` and `PAGE_DOWN` read like the arrows and are
-/// not in it.
-///
-/// By keycode rather than by [`Key`], because the keypad has no `Key` variant: those keys reach
-/// the emitter as `Key::Raw(code)`, so a table of variants would drop the bit for exactly the
-/// keys whose name says they carry it.
+/// Keycodes a clean private source puts `NumericPad` on: the four arrows, and the keypad
+/// apart from `ANSI_KEYPAD_CLEAR` and `JIS_KEYPAD_COMMA`. By keycode, not [`Key`]: the
+/// keypad has no variant and arrives as `Key::Raw(code)`.
 const NUMERIC_PAD_CODES: &[CGKeyCode] = &[
     KeyCode::LEFT_ARROW,
     KeyCode::RIGHT_ARROW,
@@ -502,12 +460,8 @@ const NUMERIC_PAD_CODES: &[CGKeyCode] = &[
     KeyCode::ANSI_KEYPAD_9,
 ];
 
-/// The non-modifier flag bits `code` carries of its own accord.
-///
-/// [`keyboard_event`] names the bits it emits rather than subtracting the ones it does not, so
-/// what a key posts is a function of the key and the caller's modifiers, and never of what an
-/// earlier post left in the source. `SecondaryFn` is not here: it is a portable [`ModifierFlags`]
-/// bit and arrives through `to_cg`.
+/// Non-modifier flag bits `code` carries of its own accord. `SecondaryFn` is a portable
+/// [`ModifierFlags`] bit and arrives through `to_cg`.
 fn intrinsic_flags(code: CGKeyCode) -> CGEventFlags {
     if NUMERIC_PAD_CODES.contains(&code) {
         CGEventFlags::CGEventFlagNumericPad
@@ -516,7 +470,6 @@ fn intrinsic_flags(code: CGKeyCode) -> CGEventFlags {
     }
 }
 
-/// The portable/native flag pairs this backend maps between, both ways.
 const FLAG_PAIRS: [(ModifierFlags, CGEventFlags); 5] = [
     (ModifierFlags::CONTROL, CGEventFlags::CGEventFlagControl),
     (ModifierFlags::COMMAND, CGEventFlags::CGEventFlagCommand),
@@ -525,7 +478,6 @@ const FLAG_PAIRS: [(ModifierFlags, CGEventFlags); 5] = [
     (ModifierFlags::FN, CGEventFlags::CGEventFlagSecondaryFn),
 ];
 
-/// The native flags for a portable [`ModifierFlags`], for an emitted event.
 fn to_cg(flags: ModifierFlags) -> CGEventFlags {
     let mut out = CGEventFlags::empty();
     for (portable, native) in FLAG_PAIRS {
@@ -534,8 +486,8 @@ fn to_cg(flags: ModifierFlags) -> CGEventFlags {
     out
 }
 
-/// The portable flags an incoming event carries, so a passed-through key keeps a modifier that
-/// was baked onto it (an injected `cmd`-`v`, or `fn`) rather than delivered as its own key.
+/// Portable flags an incoming event carries, so a passed-through key keeps a modifier that
+/// was baked onto it (an injected `cmd`-`v`, or `fn`).
 fn from_cg(flags: CGEventFlags) -> ModifierFlags {
     let mut out = ModifierFlags::empty();
     for (portable, native) in FLAG_PAIRS {
@@ -544,31 +496,18 @@ fn from_cg(flags: CGEventFlags) -> ModifierFlags {
     out
 }
 
-/// Synthesizes keys through the interceptor's tag, so they are not re-handled.
-///
-/// `!Send`, because a `CGEventSource` is: it stays on the thread that built it, which is the one
-/// that posts through it. Posting mutates a source, so one per posting thread is what this is.
+/// Synthesizes keys through the interceptor's tag. `!Send`: a `CGEventSource` stays on
+/// the thread that built it, and posting mutates it.
 pub struct Emitter {
     tag: Tag,
-    /// The one source every event this emitter posts is built from, created in [`run_tap`]. A
-    /// source per event would map 16KB of shared memory per keystroke that nothing unmaps;
-    /// [`keyboard_event`] ignores the birth flags this one accumulates, so reusing it cannot
-    /// reach the wire.
+    /// One source, created in [`run_tap`]. A source per event would map 16KB per keystroke.
     source: CGEventSource,
 }
 
 impl Emitter {
     /// Post `key` going down or coming up, carrying exactly `flags`.
-    ///
-    /// The event states its own modifiers rather than trusting a source: whoever built it said
-    /// what it carries, and we apply exactly that. See [`keyboard_event`].
-    ///
-    /// The body runs inside an autorelease pool because `CGEventPost` autoreleases two
-    /// `CFData`s per call, about 574 bytes. An `Emitter` posts from whatever thread owns it,
-    /// which for a daemon is a worker thread with no pool of its own, so a pool here is what
-    /// makes a post free what it allocated. Draining per post rather than per batch keeps the
-    /// property local to the call that needs it: pushing and popping a pool is tens of
-    /// nanoseconds against a post that costs tens of microseconds.
+    /// `CGEventPost` autoreleases two `CFData`s per call; the daemon's worker has no pool
+    /// of its own, so this drains one per post.
     fn post(&self, key: Key, press: PressType, flags: ModifierFlags) -> Result<(), EmitError> {
         autoreleasepool(|_pool| {
             let event = keyboard_event(&self.source, key, press, flags)?;
@@ -578,22 +517,19 @@ impl Emitter {
         })
     }
 
-    /// Emit one key event, a press or a release, carrying `flags`.
-    ///
     /// # Errors
     ///
-    /// Returns [`EmitError`] if the key has no code on this OS or could not be posted.
+    /// [`EmitError`] if the key has no code or could not be posted.
     pub fn emit(&self, key: Key, press: PressType, flags: ModifierFlags) -> Result<(), EmitError> {
         self.post(key, press, flags)
     }
 
-    /// Press then release `key`, both halves carrying `flags`. A chord: `cmd`-`r` is
-    /// `tap(Key::KeyR, ModifierFlags::COMMAND)`, the key with the modifier baked into its flags,
-    /// so no synthetic modifier event strands a modifier the user is really holding.
+    /// Press then release `key`, both halves carrying `flags`. A chord bakes the modifier
+    /// into the key's flags so no synthetic modifier event strands a real hold.
     ///
     /// # Errors
     ///
-    /// Returns [`EmitError`] if the key has no code on this OS or could not be posted.
+    /// [`EmitError`] if the key has no code or could not be posted.
     pub fn tap(&self, key: Key, flags: ModifierFlags) -> Result<(), EmitError> {
         self.emit(key, PressType::Down, flags)?;
         self.emit(key, PressType::Up, flags)
@@ -674,8 +610,8 @@ mod tests {
         assert_eq!(decide(&down, Some(up.clone())), Decision::Remap(up));
     }
 
-    // The six device-independent modifier bits. Only the tests name them now: production names
-    // the bits it emits, in `to_cg` and `intrinsic_flags`, rather than subtracting the rest.
+    // The six device-independent modifier bits. Tests name them; production names the bits
+    // it emits.
     const MODIFIERS: CGEventFlags = CGEventFlags::from_bits_truncate(
         CGEventFlags::CGEventFlagAlphaShift.bits()
             | CGEventFlags::CGEventFlagShift.bits()
@@ -689,9 +625,7 @@ mod tests {
         CGEventSource::new(CGEventSourceStateID::Private).expect("a private source")
     }
 
-    // Only the arrows and the keypad are born carrying NumericPad, measured against a clean
-    // private source. The second list is the trap: those keys read like the arrows and do not
-    // carry it, so naming them would put a bit on the wire that the key does not have.
+    // HOME/END/PAGE_UP/PAGE_DOWN read like the arrows and do not carry NumericPad.
     #[test]
     fn only_the_arrows_and_the_keypad_are_intrinsically_numeric_pad() {
         for code in [
@@ -723,9 +657,8 @@ mod tests {
         }
     }
 
-    // The whole point of the change: what goes on the wire is a function of the key and the
-    // portable flags, and of nothing the source is holding. Exact equality, so a reintroduced
-    // `| (get_flags() & !MODIFIERS)` fails here rather than in Spotlight six hours later.
+    // Exact equality: a reintroduced `| (get_flags() & !MODIFIERS)` fails here rather than
+    // in Spotlight later.
     #[test]
     fn the_wire_flags_are_the_portable_ones_plus_the_intrinsic_ones() {
         let source = private_source();
@@ -745,8 +678,7 @@ mod tests {
         }
     }
 
-    // A chord carries only its own modifier: an arrow must not leave NumericPad on a later
-    // `cmd`-`space`, or Spotlight's hotkey posts 0x00300000 instead of 0x00100000.
+    // An arrow must not leave NumericPad on a later `cmd`-`space`.
     #[test]
     fn a_chord_carries_its_modifier_and_nothing_else() {
         let space = keyboard_event(
@@ -767,8 +699,7 @@ mod tests {
         );
     }
 
-    // A key's own flags survive: `intrinsic_flags` names NumericPad for the arrows, so an arrow
-    // keeps the bit it is born with while a space never gains one.
+    // An arrow keeps NumericPad; a space never gains it.
     #[test]
     fn a_keys_own_flags_survive_and_others_do_not_appear() {
         let source = private_source();
@@ -793,8 +724,7 @@ mod tests {
         );
     }
 
-    // A keypad key has no `Key` variant and arrives as `Key::Raw`, which is the case a table of
-    // variants would miss: it must still post the NumericPad bit it is born with.
+    // A keypad key arrives as `Key::Raw` and must still post NumericPad.
     #[test]
     fn a_raw_keypad_key_keeps_its_numeric_pad_bit() {
         let event = keyboard_event(
@@ -807,7 +737,7 @@ mod tests {
         assert_eq!(event.get_flags(), CGEventFlags::CGEventFlagNumericPad);
     }
 
-    // A remapped key carries the flags it was given, not whatever a shared source baked in.
+    // A remapped key carries the flags it was given.
     #[test]
     fn a_remapped_key_carries_the_flags_it_was_given() {
         let event = keyboard_event(
@@ -820,7 +750,7 @@ mod tests {
         assert!(event.get_flags().contains(CGEventFlags::CGEventFlagCommand));
     }
 
-    // The OS picks the type from the keycode: a modifier is FlagsChanged, anything else KeyDown/Up.
+    // The OS picks the type from the keycode.
     #[test]
     fn a_modifier_is_a_flags_changed_and_a_key_is_not() {
         let source = private_source();
@@ -850,8 +780,7 @@ mod tests {
         ));
     }
 
-    // The tag is what keeps the interceptor from handling its own emissions, so it must mark
-    // an event it stamped and no other.
+    // The tag must mark an event it stamped and no other.
     #[test]
     fn a_tag_marks_only_its_own_events() {
         let source = CGEventSource::new(CGEventSourceStateID::Private).expect("a private source");

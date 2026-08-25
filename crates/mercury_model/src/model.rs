@@ -9,7 +9,6 @@ use crate::{
 };
 use freddie::TimerFired;
 
-/// Every trigger Mercury can register, one variant per source.
 #[derive(Clone, PartialEq, Eq, Hash, Debug, derive_more::From)]
 pub enum MercuryTrigger {
     Key(Key),
@@ -24,13 +23,7 @@ pub enum MercuryTrigger {
     Quit(Quit),
 }
 
-/// Every event Mercury can dispatch, one variant per source.
-///
-/// `TryInto` gives the `TryFrom<&MercuryEvent> for &SourceEvent` that dispatch uses to narrow
-/// the unified event to the one a trigger cares about.
-///
-/// `PartialEq` but not `Eq` under `testing`: a window's frame is four `f64`s, so the window
-/// events this carries have no total equality to derive.
+/// `PartialEq` but not `Eq` under `testing`: a window frame is four `f64`s.
 #[cfg_attr(feature = "testing", derive(PartialEq))]
 #[derive(Debug, derive_more::TryInto)]
 #[try_into(ref)]
@@ -42,12 +35,10 @@ pub enum MercuryEvent {
     FrameRead(FrameRead),
     FocusRead(FocusRead),
     Quit(Quit),
-    /// A timer fired, carrying which one. Every timer shares it: what tells them apart is which
-    /// node still holds that guard, which its binding matches on.
+    /// A timer fired. Which timer is which node still holds that guard.
     Timer(TimerFired),
 }
 
-/// The marker tying the trigger, event, and output types together.
 pub struct MercuryStruct;
 impl Bindings for MercuryStruct {
     type Trigger = MercuryTrigger;

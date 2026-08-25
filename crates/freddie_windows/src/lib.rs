@@ -1,31 +1,9 @@
-//! Watching the windows on screen, and moving them.
+//! Watch the windows on screen, and move them.
 //!
-//! The shape `freddie_app_nav` has: a source, a sink, and a seed.
-//!
-//! - [`watch`] is the source. One `AXObserver` per app reports windows opening, moving,
-//!   resizing, and closing, and the frontmost app's focused window changing. `NSWorkspace`
-//!   observers keep the observed set current as apps launch and quit and report the focused
-//!   window afresh on every app activation, and a screen observer reports the monitors. Every
-//!   callback runs on the main thread, from its run loop.
-//! - [`WindowSink::set_frame`] is the sink. It moves and resizes one window, named by id, to
-//!   a rectangle the caller already worked out. It decides nothing: it does not ask what is
-//!   frontmost, what is focused, or what the screen looks like.
-//! - [`Snapshot`] is the seed, returned by [`watch`] alongside the [`Watcher`]. The observer
-//!   reports changes, and at startup nothing has changed yet, so the state a consumer starts
-//!   from comes back with the registration that will report every change after it.
-//!
-//! A window is named by [`WindowId`], its `CGWindowID`, which outlives any one
-//! `AXUIElement` for it. The crate keeps the mapping back to an element and nothing outside
-//! it ever sees one.
-//!
-//! Setting a frame goes through the Accessibility API, which is the only way to write one:
-//! `CGWindow` can read geometry but not write it. A placement is queued on the main thread and
-//! written on a thread of its own, because the write costs tens of milliseconds and main is
-//! what every other source is waiting on.
-//!
-//! Requires the Accessibility permission, the same one the keyboard tap needs.
-//!
-//! macOS only.
+//! [`watch`] reports opens, moves, resizes, closes, focus, and monitors. [`WindowSink::set_frame`]
+//! moves one window by id. Frame writes go through Accessibility (the only write path) on a
+//! thread of their own: the write costs tens of milliseconds and main is what every other
+//! source is waiting on. Requires Accessibility. macOS only.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -88,20 +66,15 @@ fn window_id(window: AXUIElementRef) -> Option<WindowId> {
     (status == 0 && id != kCGNullWindowID).then_some(WindowId(id))
 }
 
-/// A retained `AXUIElement` for one window.
 struct Element(Owned);
 
 impl Element {
-    /// The element, for the calls that take one. Borrowed, not owned: the release stays
-    /// with the [`Owned`] inside.
     const fn raw(&self) -> AXUIElementRef {
         self.0.0.cast_mut().cast()
     }
 
-    /// A second owned reference to the same element, for handing to another thread.
-    ///
-    /// `CFRetain` rather than deriving `Clone` on [`Owned`], which two values naming one element
-    /// would release twice.
+    /// A second +1 reference, for handing to another thread. `CFRetain` rather than
+    /// deriving `Clone` on [`Owned`], which would release twice.
     fn retained(&self) -> Self {
         // SAFETY: `self` holds a live +1 reference, so retaining it yields a second one, which the
         // returned `Element` releases on drop.
@@ -111,44 +84,27 @@ impl Element {
     }
 }
 
-/// A window being watched: the element to address it through, and the app it belongs to.
 struct Watched {
     element: Element,
-    /// Which app registered it, so [`watch`]'s app-gone hook can report every window the
-    /// app took with it.
     pid: Pid,
 }
 
-/// Every window that can be addressed, the element to address it through, and where it is.
-///
-/// Main-thread only, like `apps`: the AX callbacks that write it and the `pump` that reads it both
-/// run there, so there is nothing to lock.
+/// Main-thread only: the AX callbacks that write it and the `pump` that reads it both run there.
 type Elements = HashMap<WindowId, Watched>;
 
-/// The handle a placement is performed through.
-///
-/// Cheap to clone and unattached to the thread that made it: it is a sender, and the placement is
-/// looked up and performed by the thread that owns the table.
+/// Sender for a placement. Looked up and performed by the thread that owns the table.
 #[derive(Clone)]
 pub struct WindowSink {
     placements: WakingSender<Placement>,
 }
 
 impl WindowSink {
-    /// Move and resize one window: `target` names which, and the rectangle it goes to.
-    ///
-    /// Queues the placement and wakes the main thread, which owns the element table. The write
-    /// costs tens of milliseconds and runs on a thread of its own, so this returns immediately and
-    /// a caller on a latency-sensitive loop needs no thread of its own.
-    ///
-    /// The frame is the caller's, already worked out. This does not consult the screen, the
-    /// frontmost app, or anything else.
+    /// Queue a placement and wake the main thread. Returns immediately; the write runs on
+    /// its own thread.
     ///
     /// # Errors
     ///
-    /// [`WindowError::NotWatching`] if the watcher has been dropped. A window that is not being
-    /// observed cannot be reported here, because the lookup happens after the send;
-    /// [`Watcher::pump`] logs it at `debug` instead.
+    /// [`WindowError::NotWatching`] if the watcher has been dropped.
     pub fn set_frame(&self, placement: Placement) -> Result<(), WindowError> {
         self.placements
             .send(placement)
@@ -156,11 +112,9 @@ impl WindowSink {
     }
 }
 
-/// Reads every monitor's full and visible frame, in Accessibility coordinates.
-///
-/// `NSScreen` has a global bottom-left origin and Accessibility a global top-left
-/// one, so the y flips around the PRIMARY display's height, not each screen's own.
-/// That is what places a monitor above or beside the primary at the right global y.
+/// Every monitor's full and visible frame, in Accessibility coordinates.
+/// `NSScreen` origin is bottom-left; Accessibility is top-left. Y flips around the
+/// primary display's height, not each screen's own.
 fn read_monitors(mtm: MainThreadMarker) -> Vec<Monitor> {
     let screens = NSScreen::screens(mtm);
 
@@ -190,20 +144,10 @@ fn read_monitors(mtm: MainThreadMarker) -> Vec<Monitor> {
         .collect()
 }
 
-/// A +1 CoreFoundation reference, released when it drops.
-///
-/// CF's rule is that a function with `Create` or `Copy` in its name hands you ownership,
-/// so `AXUIElementCopyAttributeValue`, `AXUIElementCreateApplication`, and `AXValueCreate`
-/// all return one of these. Wrapping it is what makes the release impossible to forget
-/// when a `?` or an early return is added between the call and the end of the function.
-///
-/// Deliberately not `Copy` and not `Clone`: two of these naming one reference would
-/// release it twice.
+/// A +1 CoreFoundation reference, released when it drops. Not `Copy` or `Clone`.
 struct Owned(CFTypeRef);
 
 impl Owned {
-    /// Take ownership of what a `Create` or `Copy` returned, or `None` if it returned
-    /// nothing.
     fn new(raw: CFTypeRef) -> Option<Self> {
         (!raw.is_null()).then_some(Self(raw))
     }
@@ -226,12 +170,8 @@ impl Drop for Owned {
 #[expect(unsafe_code)]
 unsafe impl Send for Owned {}
 
-/// One `AXValue` attribute: the name it is read by, the `AXValueType` it holds, and the
-/// Rust type that type means.
-///
-/// All three together, because `AXValueGetValue` writes through an untyped pointer: an
-/// attribute read with the wrong kind, or into the wrong type, is a mismatch nothing would
-/// otherwise catch.
+/// One `AXValue` attribute. All three together: `AXValueGetValue` writes through an
+/// untyped pointer.
 trait AxAttribute {
     const NAME: &'static str;
     const KIND: AXValueType;
@@ -252,7 +192,6 @@ impl AxAttribute for Size {
     type Value = CGSize;
 }
 
-/// The value of one attribute of `element`, owned.
 fn copy_attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
     let attribute = CFString::new(name);
     let mut value: CFTypeRef = std::ptr::null();
@@ -269,7 +208,6 @@ fn copy_attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
     (status == 0).then(|| Owned::new(value))?
 }
 
-/// The pid of the frontmost application, if there is one.
 fn frontmost_pid() -> Option<pid_t> {
     Some(
         NSWorkspace::sharedWorkspace()
@@ -278,8 +216,7 @@ fn frontmost_pid() -> Option<pid_t> {
     )
 }
 
-/// Whether `pid` names the frontmost application right now.
-/// The focused window of the app with pid `pid`, as a +1 reference the caller releases.
+/// Focused window of `pid`, as a +1 reference the caller releases.
 fn focused_window(pid: pid_t) -> Option<AXUIElementRef> {
     // SAFETY: `pid` names a live process, and `AXUIElementCreateApplication` takes
     // no ownership of it. The returned element is +1 and released below.
@@ -304,15 +241,8 @@ fn focused_window(pid: pid_t) -> Option<AXUIElementRef> {
     (status == 0 && !window.is_null()).then(|| window.cast_mut().cast())
 }
 
-/// Set one `AXValue` attribute of `element`.
-///
-/// A refusal is logged and skipped rather than returned: a placement is two or three of these and
-/// there is nothing useful for a caller to do with a partial one. The log is what says whether a
-/// write landed, which is how the ordering in [`set_frame`] is checked.
-///
-/// `warn`, because a window that does not go where it was asked to go is visible to whoever asked.
-/// An app refusing a frame it considers out of bounds, or below its minimum size, is the likeliest
-/// reason a placement looks broken, and it should not take `--level debug` to find out.
+/// Set one `AXValue` attribute. A refusal is logged at `warn` and skipped: a placement is
+/// two or three of these, and a partial one is not useful to return.
 fn set_attribute<A: AxAttribute>(element: AXUIElementRef, value: A::Value) {
     // SAFETY: `AXValueCreate` copies out of the pointer it is given, which lives for the
     // call, and returns a +1 reference `Owned` takes responsibility for.
@@ -342,35 +272,23 @@ fn set_attribute<A: AxAttribute>(element: AXUIElementRef, value: A::Value) {
     }
 }
 
-/// A width and a height.
-///
-/// Not `CGSize`, which does not implement `PartialEq`, and deliberately without CoreGraphics in it
-/// so the write ordering is arithmetic a test can table.
+/// A width and a height. Not `CGSize`, which does not implement `PartialEq`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Extent {
     width: f64,
     height: f64,
 }
 
-/// The size writes one placement performs, around the move that sits between them.
-///
-/// The move is unconditional and always goes to the target's origin, so it is not named here.
+/// Size writes around the move. The move is unconditional and not named here.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Writes {
-    /// The size to shrink to before moving, when either axis shrinks.
     shrink: Option<Extent>,
-    /// The size to grow to after moving, when either axis grows.
     grow: Option<Extent>,
 }
 
-/// Shrink, move, grow.
-///
-/// Position and size are separate writes and an app validates each against the value the other one
-/// holds, so the intermediate between two writes has to fit as well as the endpoints do. Shrinking
-/// first keeps the intermediate inside `from`, which the window already occupies. Moving at the
-/// shrunk size keeps it inside `to` on both axes. Growing happens once the origin is already right,
-/// so the last write is `to` itself. Nothing here consults a screen, because containment in `from`
-/// or `to` is what makes each step safe and both of those fit by construction.
+/// Shrink, then move, then grow.
+/// Position and size are separate writes; an app validates each against the other. Shrinking
+/// first keeps the intermediate inside `from`. Moving at the shrunk size keeps it inside `to`.
 fn writes_for(from: Frame, to: Frame) -> Writes {
     let shrunk = Extent {
         width: from.width.min(to.width),
@@ -386,13 +304,7 @@ fn writes_for(from: Frame, to: Frame) -> Writes {
     }
 }
 
-/// Move and resize one window, in an order that cannot be clamped. See [`writes_for`].
-///
-/// Two writes for a pure shrink or a pure grow, three when one axis goes each way. A stale `from`
-/// cannot break it: too small under-shrinks and every later step is still bounded by `to`, and too
-/// large makes the first write a grow that an app may clamp, which only leaves the window smaller
-/// than asked. The two writes that must not be clamped, the move and the final size, are bounded by
-/// `to` either way.
+/// Move and resize one window. See [`writes_for`].
 fn set_frame(window: AXUIElementRef, from: Frame, to: Frame) {
     let Writes { shrink, grow } = writes_for(from, to);
     if let Some(extent) = shrink {
@@ -406,37 +318,25 @@ fn set_frame(window: AXUIElementRef, from: Frame, to: Frame) {
 
 // ---- observation ----
 
-/// What the [`Watcher`] holds, reachable from the callbacks as well as from it.
-///
-/// Main-thread only: [`watch`], the launch and terminate callbacks, every `AXObserver`
-/// notification, and [`Watcher::pump`] all run there.
+/// Main-thread only: [`watch`], the workspace callbacks, every `AXObserver` notification,
+/// and [`Watcher::pump`] all run there.
 struct WatcherState {
-    /// Every window being watched. A `RefCell` and not a `Mutex`: nothing off the main thread
-    /// reaches it.
     elements: RefCell<Elements>,
     on_change: Box<dyn Fn(WindowChange)>,
 }
 
 impl WatcherState {
-    /// Tell the consumer what happened.
     fn report(&self, change: WindowChange) {
         (self.on_change)(change);
     }
 
-    /// Stop being able to address `window`. Whether there was an entry to remove, which is
-    /// whether this is the report that closes it: a window's own `AXUIElementDestroyed` and
-    /// its app terminating both arrive, in either order, and only the first of them reports.
+    /// Remove `window`. Returns whether this is the first of destroy and app-gone.
     fn forget(&self, window: WindowId) -> bool {
         self.elements.borrow_mut().remove(&window).is_some()
     }
 
-    /// Forget whichever window `element` names, and say which it was.
-    ///
-    /// By identity rather than by id: `kAXUIElementDestroyed` arrives for an element the app has
-    /// already torn down, `_AXUIElementGetWindow` refuses it, and `CFEqual` still matches the
-    /// element that was retained when the window opened. `None` when the element was not a window
-    /// this was watching, which is most of them: the notification is registered on the app, so it
-    /// reports every element the app destroys.
+    /// Forget whichever window `element` names. By identity, not id: `kAXUIElementDestroyed`
+    /// arrives for an element `_AXUIElementGetWindow` refuses; `CFEqual` still matches.
     fn forget_element(&self, element: AXUIElementRef) -> Option<WindowId> {
         let mut table = self.elements.borrow_mut();
         // SAFETY: both are live `AXUIElement`s as far as CoreFoundation is concerned. A destroyed
@@ -451,26 +351,15 @@ impl WatcherState {
     }
 }
 
-/// What a notification callback needs: the observer to register a new window on, the pid of
-/// the app it is for, and the state to report into. A C callback has this instead of a closure.
-///
-/// `observer` is held so a window created later is registered without a lookup. `pid` is
-/// which app a notification is about, which is what a focus report names and which app a new
-/// window belongs to.
-///
-/// [`Weak`](std::rc::Weak), not [`Rc`]: the [`AppWatch`] owns the registration and outlives
-/// nothing the [`Watcher`] does not also own, so the weak reference adds no lifetime and a
-/// stale callback upgrades to nothing instead of keeping the state alive.
+/// What a C notification callback needs. [`Weak`](std::rc::Weak), not [`Rc`]: a stale
+/// callback upgrades to nothing instead of keeping the state alive.
 struct Registration {
     observer: AXObserverRef,
     pid: Pid,
     state: std::rc::Weak<WatcherState>,
 }
 
-/// The one `AXObserver` callback. `refcon` is a [`Registration`] the app's [`AppObserver`]
-/// owns, which is how a C callback reaches the watcher's state without a global.
-///
-/// Runs on the main thread, since that is the run loop the sources were added to.
+/// The one `AXObserver` callback. `refcon` is a [`Registration`] the app's observer owns.
 #[expect(unsafe_code)]
 unsafe extern "C" fn on_notification(
     _observer: AXObserverRef,
@@ -510,10 +399,8 @@ unsafe extern "C" fn on_notification(
             });
         }
     } else if name == kAXUIElementDestroyedNotification {
-        // Registered on the app, so this reports every element the app destroys. The element
-        // cannot be asked for its id, and `CFEqual` still matches the one retained when the
-        // window opened, so the table answers instead. `None` for anything that was not a
-        // window being watched.
+        // Registered on the app, so this reports every destroyed element. The table matches
+        // by `CFEqual`; `None` if it was not a window being watched.
         if let Some(window) = state.forget_element(element) {
             state.report(WindowChange::Closed(window));
         }
@@ -523,15 +410,8 @@ unsafe extern "C" fn on_notification(
 }
 
 /// Record a window and subscribe to its moves and resizes. Nothing is announced here.
-///
-/// The setup pass calls this alone: every window it finds is already in the `Snapshot` `watch`
-/// returns, so reporting `Opened` for it would be a redundant replay of the seed. A window that
-/// opens later goes through here too, and `on_notification` then calls `report_open`; see its
-/// call site.
-///
-/// Destroy is registered on the app element, not here: a window-element registration for
-/// `kAXUIElementDestroyed` returns success and never fires. Move and resize keep the app's
-/// `refcon`; the live element still answers for its id.
+/// Destroy is registered on the app element: a window-element registration for
+/// `kAXUIElementDestroyed` returns success and never fires.
 fn observe_window(
     state: &WatcherState,
     observer: AXObserverRef,
@@ -569,7 +449,6 @@ fn observe_window(
     );
 }
 
-/// Every window an app has right now, each retained.
 fn app_windows(app: AXUIElementRef) -> Vec<Element> {
     let Some(value) = copy_attribute(app, kAXWindowsAttribute) else {
         return Vec::new();
@@ -590,9 +469,8 @@ fn app_windows(app: AXUIElementRef) -> Vec<Element> {
         .collect()
 }
 
-/// Watch what activation and the screens do: the frontmost app changing, which posts no
-/// focus-changed notification of its own, and the monitor arrangement changing. App launches
-/// and terminations are [`watch_apps`]'s to observe.
+/// Watch activation and screens. App activation posts no focus-changed notification of
+/// its own. App launches and terminations are [`watch_apps`]'s.
 fn watch_notifications(state: &Rc<WatcherState>) -> Vec<Observation> {
     let workspace = NSWorkspace::sharedWorkspace().notificationCenter();
     let default = NSNotificationCenter::defaultCenter();
@@ -629,33 +507,21 @@ fn watch_notifications(state: &Rc<WatcherState>) -> Vec<Observation> {
     observations
 }
 
-/// Holds every registration that makes windows report. While one of these is alive,
-/// changes reach the `on_change` it was built with; dropping it stops them.
-///
-/// Dropping it is all it takes: the [`AppWatch`] goes, which releases every `AXObserver` and
-/// removes its run loop source, and the placement receiver goes, which is how a live
-/// [`WindowSink`] learns it is over. No `Drop` impl needed.
-///
-/// `!Send`, like `freddie_menu_bar`'s `MenuBar`: it holds main-thread-only state and stays
-/// on the thread that built it.
+/// Holds every registration that makes windows report. `!Send`. Dropping it stops reports.
 pub struct Watcher {
-    /// The activation and screen observations. Held for their `Drop`, and declared first so
-    /// they stop before the state they write into is torn down: fields drop in declaration
-    /// order.
+    /// Declared first so they stop before the state they write into is torn down.
     _notifications: Vec<Observation>,
-    /// The per-app observers, kept current as apps launch and quit. Declared before `state`
-    /// for the same reason as the observations.
+    /// Declared before `state` so observers stop first.
     _apps: AppWatch<Registration>,
-    /// Handed to every [`WindowSink`].
+
     placements_sender: WakingSender<Placement>,
-    /// Placements waiting to be performed. Drained by [`Self::pump`] on the main thread.
+
     placements: Receiver<Placement>,
     state: Rc<WatcherState>,
 }
 
 impl Watcher {
-    /// A handle to perform placements through. Cheap to clone, `Send`, and safe to keep past the
-    /// watcher, which it answers [`WindowError::NotWatching`] from.
+    /// Safe to keep past the watcher; it answers [`WindowError::NotWatching`].
     #[must_use]
     pub fn sink(&self) -> WindowSink {
         WindowSink {
@@ -663,11 +529,8 @@ impl Watcher {
         }
     }
 
-    /// Perform every placement queued since the last wake.
-    ///
-    /// On the main thread, because that is where the element table lives. The lookup is a hashmap
-    /// hit; the write is handed to a thread of its own, because it costs tens of milliseconds and
-    /// this thread is what every other source is waiting on.
+    /// Perform every placement queued since the last wake. Main thread: the element table
+    /// lives here. The write runs on its own thread.
     pub fn pump(&self) {
         for placement in self.placements.try_iter() {
             let found = self
@@ -688,26 +551,15 @@ impl Watcher {
     }
 }
 
-/// Report every window change to `on_change`, returning the watcher that does it.
+/// Report every window change to `on_change`.
 ///
-/// The install pass reports through `on_change` too — one `Screens`, one `Opened` per existing
-/// window, one `FocusChanged` for the frontmost app — so the seed path and the steady-state
-/// path are the same code, and a consumer's model starts empty.
-///
-/// Observes every running app, and every app that launches while the returned [`Watcher`]
-/// is alive. Registering is cheap and takes no thread: each `AXObserver` contributes a run
-/// loop source to the main run loop, which `freddie_main_loop` is what gets you into.
-///
-/// `on_change` runs on the main thread, serialized with every other main-thread callback,
-/// so it must hand its work elsewhere and return. Sending on a channel is the intended
-/// body.
-///
-/// The [`Snapshot`] comes back with the watcher rather than from a second call, so no
-/// caller can let a report land between reading the starting state and using it.
+/// The install pass reports too, so the seed path and the steady-state path are the same
+/// code. `on_change` runs on the main thread and must not block. The [`Snapshot`] comes
+/// back with the watcher.
 ///
 /// # Errors
 ///
-/// [`WindowError::NotMainThread`] if called off the main thread, and
+/// [`WindowError::NotMainThread`] if called off the main thread,
 /// [`WindowError::NotTrusted`] if Accessibility has not been granted.
 pub fn watch(
     waker: &MainWaker,
@@ -805,18 +657,13 @@ pub fn watch(
     })
 }
 
-/// The focused window of `pid` right now, through Accessibility.
-///
-/// The elements it creates are its own and per call. `None` when the app has no focused
-/// window, its window has no readable id, or it will not answer. Callable from any thread; an
-/// effect performer's read.
+/// The focused window of `pid` right now. Callable from any thread.
 #[must_use]
 pub fn focused_window_of(pid: Pid) -> Option<WindowId> {
     focused_window_id(pid.0)
 }
 
-/// The frame of `window` right now, by id through the window server. `None` for a window that
-/// is gone or unreadable. Callable from any thread; an effect performer's read.
+/// The frame of `window` right now, by id through the window server. Callable from any thread.
 #[must_use]
 pub fn frame_of(window: WindowId) -> Option<Frame> {
     let infos = copy_window_info(kCGWindowListOptionIncludingWindow, window.0)?;
@@ -839,11 +686,8 @@ pub fn frame_of(window: WindowId) -> Option<Frame> {
     })
 }
 
-/// The focused window of the app with pid `pid`, by id.
-///
-/// Read at boot for the frontmost app, seeding the value the observer cannot report because
-/// none has changed yet, and read again on each app activation, which posts no focus-changed
-/// notification of its own.
+/// The focused window of the app with pid `pid`, by id. App activation posts no
+/// focus-changed notification of its own.
 fn focused_window_id(pid: pid_t) -> Option<WindowId> {
     let window = focused_window(pid)?;
     let id = window_id(window);
@@ -874,9 +718,7 @@ mod tests {
         assert!(!f.contains(-1.0, 0.0));
     }
 
-    /// A window's corner picks the monitor it sits on, which is how [`monitor_for`]
-    /// chooses the screen to place within. Two monitors side by side, the second
-    /// shorter, the way an external display next to a laptop is.
+    /// Two monitors side by side, the second shorter.
     #[test]
     fn a_point_picks_the_monitor_it_is_on() {
         let left = Frame {

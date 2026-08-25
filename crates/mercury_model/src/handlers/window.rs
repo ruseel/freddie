@@ -1,4 +1,4 @@
-//! The window source's handlers: facts mint and request, value reads commit.
+//! Window source: facts mint and request; value reads commit.
 
 use freddie::TimerFired;
 use laserbeam::{Completed, CompletesTo};
@@ -7,8 +7,7 @@ use crate::state::MercuryPath;
 use crate::{FocusRead, FrameRead, MercuryEffect, WindowEvent};
 use freddie_windows_types::WindowChange;
 
-/// A window fact: record what died, and request the read that fills it, the riding half in
-/// the effect. An untracked window's fact requests nothing.
+/// Record the change and request the read that fills it. Untracked windows request nothing.
 pub(crate) fn record_windows<'x>(
     ev: &WindowEvent,
     _snap: (),
@@ -59,7 +58,6 @@ pub(crate) fn record_windows<'x>(
     (effects, root.complete())
 }
 
-/// A frame read landed: commit it against the placeholder its riding half names.
 pub(crate) fn record_frame_read<'x>(
     ev: &FrameRead,
     _snap: (),
@@ -70,7 +68,6 @@ pub(crate) fn record_frame_read<'x>(
     (Vec::new(), root.complete())
 }
 
-/// A focus read landed: commit it against the placeholder its riding half names.
 pub(crate) fn record_focus_read<'x>(
     ev: &FocusRead,
     _snap: (),
@@ -81,8 +78,7 @@ pub(crate) fn record_focus_read<'x>(
     (Vec::new(), root.complete())
 }
 
-/// The placement mercury asked for has had its time: whatever the window has done since,
-/// what it does next is the user's.
+/// Settle wait ended: further moves are the user's.
 #[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn placement_settled<'x>(
     _ev: &TimerFired,

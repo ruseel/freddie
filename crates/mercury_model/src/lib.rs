@@ -1,10 +1,6 @@
 //! mercury's model: a pure function of state and event.
 //!
-//! This crate cannot call macOS. No platform crate is in its dependency graph, the workspace
-//! forbids `unsafe`, and clippy denies std's own OS surface (processes, threads, clocks,
-//! files, sockets). `cargo check -p mercury_model` is the proof: if it compiles, dispatch
-//! reads nothing but `(state, event)`. The one sanctioned impurity is timer-guard minting
-//! through `freddie::timer_effect_and_guard`, which is channel construction, not an OS call.
+//! This crate cannot call macOS: no platform crate in the graph, `unsafe` forbidden, clippy denies std's OS surface. The one impurity is timer-guard minting through `freddie::timer_effect_and_guard`, which is channel construction.
 
 pub use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, PressType};
 

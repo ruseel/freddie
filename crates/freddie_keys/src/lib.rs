@@ -1,13 +1,4 @@
-//! The platform-neutral keyboard vocabulary shared across freddie.
-//!
-//! [`Key`] names physical keys independent of any OS. It is the type consumers
-//! bind against, and the type each `freddie_keyboard` backend maps its native key
-//! codes to and from. Because this crate owns the type, [`Key`] is a `bind`
-//! trigger directly, so a binding reads `Key::KeyR` with no wrapper.
-//!
-//! The named variants are exhaustive on purpose, so a backend's keycode table is a
-//! `match` and a missing mapping is a compile error. [`Key::Raw`] carries a native
-//! code with no name, both for keys the table lacks and for made-up keys.
+//! Platform-neutral keyboard vocabulary: [`Key`], [`KeyEvent`], modifier flags, and bind triggers.
 
 use bind::EventTrigger;
 
@@ -116,8 +107,7 @@ pub enum Key {
     Dot,
     Slash,
 
-    /// A native key code with no name: a key the table does not cover, or a
-    /// made-up key used as a remap intermediary. Not portable across OSes.
+    /// A native key code with no name. Not portable across OSes.
     Raw(u16),
 }
 
@@ -130,8 +120,7 @@ pub enum PressType {
 
 /// A key going down or coming up, carrying its modifier flags.
 ///
-/// The flags are authoritative: the source stamps them at creation (macOS from the hardware
-/// modifier state for a physical key, the posting app for an injected one). A passed-through key
+/// The flags are authoritative: the source stamps them at creation. A passed-through key
 /// carries exactly these; a sync sweep or a chord builds its own.
 #[derive(Clone, PartialEq, Eq)]
 pub struct KeyEvent {
@@ -140,21 +129,13 @@ pub struct KeyEvent {
     pub flags: ModifierFlags,
 }
 
-/// The modifier keys an emitted event carries, as a portable bitset. `freddie_keyboard` maps it
-/// to the platform's native flags when it posts the event.
-///
-/// A `CGEvent`'s own flags are baked in from the source's state when it is created, which lags a
-/// modifier posted microseconds earlier, so a chord posted back to back carries the wrong flags.
-/// Stating the flags on the event and applying exactly them makes the emitted stream say what it
-/// means, whatever the source thinks.
+/// Portable modifier bitset. Stated on the event rather than read from a `CGEvent` source,
+/// which lags a modifier posted microseconds earlier.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ModifierFlags(u8);
 
 impl std::fmt::Debug for KeyEvent {
     /// `KeyEvent { key: KeyJ, press: Down }`, with `flags` only when some modifier is set.
-    ///
-    /// Every dispatched event goes in the log, and most keys carry no modifier, so the derive
-    /// spent a third of each line saying so.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -169,8 +150,6 @@ impl std::fmt::Debug for KeyEvent {
 }
 
 impl std::fmt::Debug for ModifierFlags {
-    /// The modifiers set, by name: `ModifierFlags(COMMAND|SHIFT)`, or `ModifierFlags()` for none.
-    /// The derive printed the raw bits, which nothing can read at a glance.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ModifierFlags(")?;
         let mut any = false;
@@ -196,7 +175,6 @@ impl std::fmt::Debug for ModifierFlags {
 impl std::ops::BitOr for ModifierFlags {
     type Output = Self;
 
-    /// The union of two sets, so a chord's modifiers read as `COMMAND | SHIFT`.
     fn bitor(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
@@ -207,35 +185,29 @@ impl ModifierFlags {
     pub const COMMAND: Self = Self(1 << 1);
     pub const ALT: Self = Self(1 << 2);
     pub const SHIFT: Self = Self(1 << 3);
-    /// The `fn` (Globe) modifier. Not a key tracked as held (it arrives only as a flag on other
-    /// events), so it rides through solely on this bit.
+    /// The `fn` (Globe) modifier. Arrives only as a flag on other events, not as a key.
     pub const FN: Self = Self(1 << 4);
 
-    /// No modifiers.
     #[must_use]
     pub const fn empty() -> Self {
         Self(0)
     }
 
-    /// Whether no modifier is set.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
 
-    /// The raw bits, for a backend mapping them to native flags.
     #[must_use]
     pub const fn bits(self) -> u8 {
         self.0
     }
 
-    /// Whether every bit in `flag` is set.
     #[must_use]
     pub const fn contains(self, flag: Self) -> bool {
         self.0 & flag.0 == flag.0
     }
 
-    /// Set or clear `flag`.
     pub const fn set(&mut self, flag: Self, on: bool) {
         self.0 = if on {
             self.0 | flag.0
@@ -254,7 +226,6 @@ impl EventTrigger for Key {
 }
 
 impl Key {
-    /// A trigger matching only this key's press.
     #[must_use]
     pub const fn down(self) -> KeyPress {
         KeyPress {
@@ -263,7 +234,6 @@ impl Key {
         }
     }
 
-    /// A trigger matching only this key's release.
     #[must_use]
     pub const fn up(self) -> KeyPress {
         KeyPress {
@@ -272,17 +242,13 @@ impl Key {
         }
     }
 
-    /// A trigger matching this key going either direction.
-    ///
-    /// For a handler that preserves the event's press, so a mapping's down and up rows collapse
-    /// into one.
+    /// Trigger matching this key going either direction.
     #[must_use]
     pub const fn press(self) -> KeyEitherPress {
         KeyEitherPress { key: self }
     }
 
-    /// Whether this is a modifier key tracked as held: control, command, alt, or shift, left or
-    /// right. Caps lock (a lock) and fn (no variant) are not modifiers here.
+    /// Control, command, alt, or shift, left or right. Caps lock and fn are not.
     #[must_use]
     pub const fn is_modifier(self) -> bool {
         matches!(
@@ -298,7 +264,6 @@ impl Key {
         )
     }
 
-    /// Whether this is a letter key (`KeyA`..=`KeyZ`).
     #[must_use]
     pub const fn is_letter(self) -> bool {
         matches!(
@@ -332,7 +297,6 @@ impl Key {
         )
     }
 
-    /// Whether this is a main number-row key (`Num0`..=`Num9`).
     #[must_use]
     pub const fn is_number_row(self) -> bool {
         matches!(
@@ -350,7 +314,6 @@ impl Key {
         )
     }
 
-    /// Whether this is a function key (`F1`..=`F24`).
     #[must_use]
     pub const fn is_function(self) -> bool {
         matches!(
@@ -382,7 +345,6 @@ impl Key {
         )
     }
 
-    /// Whether this is an arrow key.
     #[must_use]
     pub const fn is_arrow(self) -> bool {
         matches!(
@@ -391,7 +353,6 @@ impl Key {
         )
     }
 
-    /// Whether this is a navigation key: home, end, page up/down.
     #[must_use]
     pub const fn is_navigation(self) -> bool {
         matches!(self, Self::Home | Self::End | Self::PageUp | Self::PageDown)
@@ -399,28 +360,18 @@ impl Key {
 }
 
 /// A set of physical keys treated as one bind target.
-///
-/// Use like [`Key`]: `KeyGroup::Number.down().bare()`, `KeyGroup::Letter.up().with(SHIFT)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KeyGroup {
-    /// Every key.
     Any,
-    /// Letter keys: `KeyA`..=`KeyZ`.
     Letter,
-    /// The main number row: `Num0`..=`Num9`.
     Number,
-    /// Function keys: `F1`..=`F24`.
     Function,
-    /// Modifier keys tracked as held: control, command, alt, shift (left and right).
     Modifier,
-    /// Arrow keys.
     Arrow,
-    /// Home, end, page up/down.
     Navigation,
 }
 
 impl KeyGroup {
-    /// Whether `key` is in this group.
     #[must_use]
     pub const fn contains(self, key: Key) -> bool {
         match self {
@@ -434,7 +385,6 @@ impl KeyGroup {
         }
     }
 
-    /// A trigger matching this group's keys going down.
     #[must_use]
     pub const fn down(self) -> KeyGroupPress {
         KeyGroupPress {
@@ -443,7 +393,6 @@ impl KeyGroup {
         }
     }
 
-    /// A trigger matching this group's keys coming up.
     #[must_use]
     pub const fn up(self) -> KeyGroupPress {
         KeyGroupPress {
@@ -452,8 +401,6 @@ impl KeyGroup {
         }
     }
 
-    /// A trigger matching this group's keys going either direction, as [`Key::press`] does for
-    /// one key.
     #[must_use]
     pub const fn press(self) -> KeyGroupEitherPress {
         KeyGroupEitherPress { group: self }
@@ -468,7 +415,7 @@ impl EventTrigger for KeyGroup {
     }
 }
 
-/// A key from a [`KeyGroup`] going one direction, from [`KeyGroup::down`] or [`KeyGroup::up`].
+/// A key from a [`KeyGroup`] going one direction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyGroupPress {
     pub group: KeyGroup,
@@ -484,7 +431,6 @@ impl EventTrigger for KeyGroupPress {
 }
 
 impl KeyGroupPress {
-    /// Match only when exactly `flags` are held.
     #[must_use]
     pub const fn with(self, flags: ModifierFlags) -> KeyGroupChord {
         KeyGroupChord {
@@ -494,7 +440,6 @@ impl KeyGroupPress {
         }
     }
 
-    /// Match only when no modifier is held.
     #[must_use]
     pub const fn bare(self) -> KeyGroupChord {
         self.with(ModifierFlags::empty())
@@ -517,7 +462,7 @@ impl EventTrigger for KeyGroupChord {
     }
 }
 
-/// A trigger matching a key going one direction, from [`Key::down`] or [`Key::up`].
+/// A key going one direction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyPress {
     pub key: Key,
@@ -533,7 +478,6 @@ impl EventTrigger for KeyPress {
 }
 
 impl KeyPress {
-    /// A trigger matching this press only when exactly `flags` are held.
     #[must_use]
     pub const fn with(self, flags: ModifierFlags) -> KeyChord {
         KeyChord {
@@ -543,22 +487,16 @@ impl KeyPress {
         }
     }
 
-    /// A trigger matching this press only when no modifier is held.
-    ///
-    /// The counterpart to [`with`](Self::with): a node that binds one key at several modifier
-    /// combinations writes every one of them as a chord, so no two of its triggers can match the
-    /// same event and which one wins is not a question about declaration order.
+    /// Match only when no modifier is held. A node that binds one key at several
+    /// modifier combinations writes every one of them as a chord.
     #[must_use]
     pub const fn bare(self) -> KeyChord {
         self.with(ModifierFlags::empty())
     }
 }
 
-/// A key going one direction with exactly these modifiers held, from [`KeyPress::with`].
-///
-/// Where [`KeyPress`] ignores the flags an event carries, this matches them exactly, so `cmd`-`l`
-/// and a bare `l` are different triggers. Caps lock is not a [`ModifierFlags`] bit (the backend
-/// leaves `AlphaShift` out of its mapping), so a chord matches with caps lock on or off.
+/// A key going one direction with exactly these modifiers held.
+/// Caps lock is not a [`ModifierFlags`] bit, so a chord matches with caps lock on or off.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyChord {
     pub key: Key,
@@ -574,7 +512,7 @@ impl EventTrigger for KeyChord {
     }
 }
 
-/// A trigger matching a key going either direction, from [`Key::press`].
+/// A key going either direction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyEitherPress {
     pub key: Key,
@@ -589,7 +527,6 @@ impl EventTrigger for KeyEitherPress {
 }
 
 impl KeyEitherPress {
-    /// A trigger matching either press only when exactly `flags` are held.
     #[must_use]
     pub const fn with(self, flags: ModifierFlags) -> KeyEitherChord {
         KeyEitherChord {
@@ -598,14 +535,13 @@ impl KeyEitherPress {
         }
     }
 
-    /// A trigger matching either press only when no modifier is held.
     #[must_use]
     pub const fn bare(self) -> KeyEitherChord {
         self.with(ModifierFlags::empty())
     }
 }
 
-/// A key going either direction with exactly these modifiers held, from [`KeyEitherPress::with`].
+/// A key going either direction with exactly these modifiers held.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyEitherChord {
     pub key: Key,
@@ -620,7 +556,7 @@ impl EventTrigger for KeyEitherChord {
     }
 }
 
-/// A trigger matching a group's keys going either direction, from [`KeyGroup::press`].
+/// A group's keys going either direction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyGroupEitherPress {
     pub group: KeyGroup,
@@ -635,7 +571,6 @@ impl EventTrigger for KeyGroupEitherPress {
 }
 
 impl KeyGroupEitherPress {
-    /// A trigger matching either press only when exactly `flags` are held.
     #[must_use]
     pub const fn with(self, flags: ModifierFlags) -> KeyGroupEitherChord {
         KeyGroupEitherChord {
@@ -644,15 +579,13 @@ impl KeyGroupEitherPress {
         }
     }
 
-    /// A trigger matching either press only when no modifier is held.
     #[must_use]
     pub const fn bare(self) -> KeyGroupEitherChord {
         self.with(ModifierFlags::empty())
     }
 }
 
-/// A group's keys going either direction with exactly these modifiers held, from
-/// [`KeyGroupEitherPress::with`].
+/// A group's keys going either direction with exactly these modifiers held.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct KeyGroupEitherChord {
     pub group: KeyGroup,
@@ -668,10 +601,6 @@ impl EventTrigger for KeyGroupEitherChord {
 }
 
 /// A key event tagged with the consumer's device identity `D`.
-///
-/// `D` is whatever `intercept_with_source`'s categorize returns. The model event carries this
-/// (or a newtype of it); bare [`Key`] / [`KeyPress`] still match only the key half via a
-/// projecting `TryFrom` in the app.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct DeviceKeyed<E, D> {
     pub key: E,
@@ -679,8 +608,6 @@ pub struct DeviceKeyed<E, D> {
 }
 
 /// Restricts an inner key trigger to devices the filter `D` matches.
-///
-/// Both halves are [`EventTrigger`]s: key policy and device policy use the same mechanism.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct OnDevice<T, D> {
     pub device: D,
@@ -700,16 +627,13 @@ where
 }
 
 impl<T, D> OnDevice<T, D> {
-    /// Build a device-scoped trigger.
     #[must_use]
     pub const fn new(device: D, inner: T) -> Self {
         Self { device, inner }
     }
 }
 
-/// Attach a device filter to any key-side trigger.
 pub trait WithDevice: Sized {
-    /// Match only when the event's device satisfies `device`.
     #[must_use]
     fn on_device<D: EventTrigger>(self, device: D) -> OnDevice<Self, D> {
         OnDevice {
@@ -790,7 +714,6 @@ mod tests {
 
     #[test]
     fn debug_leaves_out_flags_when_there_are_none() {
-        // Every dispatched event is logged, and most keys carry no modifier.
         let bare = KeyEvent {
             key: Key::KeyJ,
             press: PressType::Down,
@@ -829,7 +752,6 @@ mod tests {
             flags: ModifierFlags::COMMAND | ModifierFlags::SHIFT,
         };
 
-        // The three are mutually exclusive: each event matches exactly one of them.
         for (trigger, matching) in [
             (Key::KeyL.down().bare(), &bare),
             (Key::KeyL.down().with(ModifierFlags::COMMAND), &with_command),
@@ -865,8 +787,6 @@ mod tests {
         }));
     }
 
-    // A plain press ignores the flags, which is why a node binding one key at several modifier
-    // combinations has to write every one of them as a chord.
     #[test]
     fn a_press_matches_whatever_modifiers_are_held() {
         let trigger = Key::KeyL.down();

@@ -2,15 +2,8 @@ use std::fmt;
 
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
 
-/// A physical hold key that taps as `alone` (+ flags) when released with no other key, and acts
-/// as `modifier`/`flag` when another key arrives while it is down.
-///
-/// No timer. Alone vs modifier is only whether another key arrived before release.
-///
-/// Examples:
-/// - hold `Escape`, alone Escape, modifier Control (laptop Caps remapped to Esc in System Settings)
-/// - hold `ShiftLeft`, alone `(`, modifier Shift
-/// - hold `ShiftRight`, alone `)`, modifier Shift
+/// A hold key that taps as `alone` when released with no other key, and acts as
+/// `modifier`/`flag` when another key arrives while it is down. No timer.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct AloneOrModifier {
     hold: Key,
@@ -25,17 +18,14 @@ pub struct AloneOrModifier {
 enum Role {
     #[default]
     Idle,
-    /// Hold key is down; no other key yet. Up → tap `alone`.
+    /// Hold key is down; no other key yet. Up taps `alone`.
     Pending,
     /// Another key arrived while held; `modifier` down has been emitted.
     AsModifier,
 }
 
 impl fmt::Debug for AloneOrModifier {
-    /// Only the live phase: `AloneOrModifier { Escape: Pending }`. Idle is empty braces.
-    ///
-    /// Hold/alone/modifier config never changes for a given machine, so printing it on every
-    /// dispatch would repeat the definition rather than the state that moved.
+    /// Live phase only: `AloneOrModifier { Escape: Pending }`. Idle is empty braces.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "AloneOrModifier {{")?;
         match self.role {
@@ -67,7 +57,7 @@ impl AloneOrModifier {
     /// `Escape` alone → Escape; held with other keys → Control.
     ///
     /// For a laptop Caps key, remap Caps → Escape in System Settings so the physical key never
-    /// arrives as `CapsLock` (no `HIDSystem` latch). frebbie then dual-roles that Escape.
+    /// arrives as `CapsLock` (no `HIDSystem` latch).
     #[must_use]
     pub const fn escape_control() -> Self {
         Self::new(
@@ -109,7 +99,7 @@ impl AloneOrModifier {
         self.hold
     }
 
-    /// Whether the hold is acting as the modifier (another key already promoted this hold).
+    /// Whether the hold is acting as the modifier.
     #[must_use]
     pub const fn is_modifier(self) -> bool {
         matches!(self.role, Role::AsModifier)
@@ -127,13 +117,8 @@ impl AloneOrModifier {
         !matches!(self.role, Role::Idle)
     }
 
-    /// Down or up of the physical hold key. Returns synthetic events to emit; the physical hold
-    /// key is never re-emitted (consumer swallows it).
-    ///
-    /// - Down: enter Pending, emit nothing.
-    /// - Up while Pending: `alone` down+up (with `alone_flags`), return Idle.
-    /// - Up while acting as modifier: `modifier` up, return Idle.
-    /// - Up while Idle: nothing (spurious).
+    /// Down or up of the physical hold key. Returns synthetic events; the physical hold
+    /// key is never re-emitted.
     pub fn on_hold(&mut self, press: PressType) -> Vec<KeyEvent> {
         match press {
             PressType::Down => {
@@ -163,9 +148,7 @@ impl AloneOrModifier {
         }
     }
 
-    /// Call before emitting any other key while this dual-role is in force.
-    ///
-    /// If pending, promotes to modifier and returns `modifier` down (emit first). Otherwise empty.
+    /// If pending, promote to modifier and return `modifier` down. Otherwise empty.
     pub fn promote_if_pending(&mut self) -> Vec<KeyEvent> {
         if self.role != Role::Pending {
             return Vec::new();

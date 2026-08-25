@@ -1,5 +1,4 @@
-// The `#[binds(..)]` type must implement `Bindings`. The node is a full laserbeam
-// node, so the only failure is the missing `Bindings` impl.
+// The `#[binds(..)]` type must implement `Bindings`. The node is otherwise complete, so the only failure is the missing impl.
 use bind::Bind;
 
 struct NotBindings;

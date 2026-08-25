@@ -1,31 +1,22 @@
 import type { IncomingEvent } from "./wire/IncomingEvent";
 
-// mercury's default. The options page overrides it, and it has to match whatever `--port` or
-// `MERCURY_PORT` mercury was given.
+// Must match mercury's `--port` / `MERCURY_PORT`. The options page overrides it.
 const DEFAULT_PORT = 3883;
 
 let socket: WebSocket | null = null;
 
 /**
- * The URL last sent on `socket`, so an identical one is not sent again.
- *
- * Cleared whenever the socket is dropped: a fresh mercury has never been told anything, and the
- * front tab's URL has to reach it even though this side already sent it to the last one.
+ * Last URL sent on `socket`. Cleared when the socket drops, so a new mercury still
+ * receives the front tab even if this side already sent that URL to the previous one.
  */
 let lastSent: string | null = null;
 
-/** The configured port, or the default if the options page has never been used. */
 async function port(): Promise<number> {
   const { port } = await chrome.storage.local.get({ port: DEFAULT_PORT });
   return typeof port === "number" ? port : DEFAULT_PORT;
 }
 
-/**
- * The socket to send on, opening one if there is none.
- *
- * Returns it rather than leaving the caller to read the module variable, which could by then hold
- * a different socket than the one it asked for.
- */
+/** Open a socket if needed and return it. Do not reread the module variable after awaiting. */
 async function connect(): Promise<WebSocket> {
   if (
     socket !== null &&
@@ -35,9 +26,8 @@ async function connect(): Promise<WebSocket> {
     return socket;
   }
   const ws = new WebSocket(`ws://127.0.0.1:${String(await port())}`);
-  // Each handler clears only its own socket. A connection that fails fires `error` and then
-  // `close`, and by then a later tab event may already have replaced `socket`; clearing
-  // unconditionally would drop a live socket and strand whatever it was about to send.
+  // Clear only this socket. A failed connect fires `error` then `close`; by then a later
+  // tab event may already have replaced `socket`.
   const forget = (): void => {
     if (socket !== ws) return;
     socket = null;
@@ -49,12 +39,7 @@ async function connect(): Promise<WebSocket> {
   return ws;
 }
 
-/**
- * Send `url` to mercury.
- *
- * A URL that cannot be sent is dropped rather than queued: the next tab event supersedes it, so a
- * retry would deliver a stale answer to a question nobody asked yet.
- */
+/** Send `url` to mercury. A send that cannot go out is dropped; the next tab event supersedes it. */
 async function pushUrl(url: string | undefined): Promise<void> {
   if (url === undefined || url === "") return;
   if (url === lastSent) return;
@@ -79,15 +64,13 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
   void chrome.tabs.get(tabId).then((tab) => pushUrl(tab.url));
 });
 
-// `onUpdated` fires per changed tab, so this filters to the active one and to changes that
-// actually carried a URL.
+// `onUpdated` fires per changed tab; keep the active one, and only when a URL arrived.
 chrome.tabs.onUpdated.addListener((_tabId, info, tab) => {
   if (info.url !== undefined && tab.active) void pushUrl(info.url);
 });
 
-// Returning from another application, and switching between two Chrome windows, both change which
-// tab is front with no tab event at all. `WINDOW_ID_NONE` means Chrome lost focus, so there is
-// nothing to report.
+// App-switch and Chrome-window switch change the front tab with no tab event.
+// `WINDOW_ID_NONE` is Chrome losing focus.
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   void chrome.tabs
@@ -96,11 +79,8 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 });
 
 /**
- * A same-document navigation in the front tab: `pushState`, `replaceState`, or a fragment change.
- *
- * `onUpdated` covers document loads and nothing else, so without these a single-page app changes
- * route with no event at all. `frameId === 0` keeps this to the top frame: an iframe navigating
- * does not change what the tab is showing.
+ * Same-document navigation in the front tab (`pushState`, `replaceState`, fragment).
+ * `onUpdated` only covers document loads. `frameId === 0` is the top frame.
  */
 const onSameDocument = ({
   tabId,

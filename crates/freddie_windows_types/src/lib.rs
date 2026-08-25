@@ -1,13 +1,11 @@
-//! The windows watcher's reported vocabulary: the pure data its events and snapshots carry.
+//! Events and snapshots from the windows watcher.
 
-/// A running app, by process id. `pid_t` is an `i32`, and an `i32` is not a process.
+/// A running app, by process id.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Pid(pub i32);
 
-/// A window's `CGWindowID`: the identity that outlives any one `AXUIElement` naming it.
-///
-/// Elements are created per call, so two for the same window are different pointers and
-/// the element itself cannot be the key.
+/// A window's `CGWindowID`. Outlives any one `AXUIElement` naming it: elements are
+/// created per call, so two for the same window are different pointers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WindowId(pub u32);
 
@@ -21,17 +19,14 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Whether `(x, y)` lies in this frame. Half-open: the left and top edges are in, the
-    /// right and bottom are not, so abutting frames do not both claim a point.
+    /// Whether `(x, y)` lies in this frame. Half-open: left and top in, right and bottom not.
     #[must_use]
     pub const fn contains(self, x: f64, y: f64) -> bool {
         x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 }
 
-/// A monitor: its full frame, for locating a window, and its visible frame, the area
-/// a placement fills (the full frame minus the menu bar and the dock). Both in
-/// Accessibility coordinates.
+/// A monitor. `full` locates a window; `visible` is `full` minus the menu bar and dock.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Monitor {
     pub full: Frame,
@@ -45,7 +40,7 @@ pub enum WindowError {
     NotMainThread,
     /// The Accessibility permission has not been granted.
     NotTrusted,
-    /// The watcher has been dropped, so nothing is being observed at all.
+    /// The watcher has been dropped.
     NotWatching,
 }
 
@@ -61,34 +56,30 @@ impl std::fmt::Display for WindowError {
 
 impl std::error::Error for WindowError {}
 
-/// What the windows are doing. One variant per fact the watcher can report; the values a fact
-/// invalidates are the consumer's reads to make.
+/// One fact the windows watcher can report. Values a fact invalidates are the consumer's reads.
 #[derive(Clone, PartialEq, Debug)]
 pub enum WindowChange {
     /// A window appeared. Its frame is the consumer's read to make.
     Opened(WindowId),
-    /// A window moved: its old frame is dead, and the new one is the consumer's read to make.
+    /// A window moved. The new frame is the consumer's read to make.
     Moved(WindowId),
-    /// A window was resized: same contract as [`Moved`](Self::Moved).
+    /// A window was resized. Same contract as [`Moved`](Self::Moved).
     Resized(WindowId),
-    /// A window went away. Final: a read landing after this names a window the consumer
-    /// already removed.
+    /// A window went away.
     Closed(WindowId),
-    /// Focus changed in the app with this pid — a notification's report and an activation's
-    /// alike, ungated. Which window focus landed on is the consumer's read to make.
+    /// Focus changed in the app with this pid. Which window is the consumer's read to make.
     FocusChanged(Pid),
     /// The app and every entry keyed by its pid are gone. Reported after the per-window
     /// [`Closed`](Self::Closed) reports.
     AppGone(Pid),
-    /// The monitors changed, with the new arrangement: reading `NSScreen` is synchronous in
-    /// the callback, so no gap exists and the value rides the event.
+    /// The monitors changed. Reading `NSScreen` is synchronous in the callback, so the
+    /// arrangement rides the event.
     Screens(Vec<Monitor>),
 }
 
 /// A placement: the window, where it is, and where to put it.
 ///
-/// `from` orders the writes (grow before move, shrink after); the model owns it, since a
-/// placement only fires from a known frame. The payload carries everything performing needs.
+/// `from` orders the writes (grow before move, shrink after).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Placement {
     pub window: WindowId,

@@ -1,16 +1,8 @@
 //! A macOS menu-bar status item with a single Quit entry.
 //!
-//! [`show`] builds the status item and its one-item menu and registers a callback
-//! that fires when Quit is chosen. Call it on the main thread, AFTER `NSApp` is
-//! initialized (see `freddie_main_loop::init_menu_bar_app`): tray-icon creates an
-//! `NSStatusItem`, which macOS requires on the main thread, and the status item
-//! needs an app to live in.
-//!
-//! The returned [`MenuBar`] owns the status item. Hold it for as long as the icon
-//! should be visible; dropping it removes the icon. It is `!Send`, so it stays on
-//! the main thread that created it.
-//!
-//! macOS only.
+//! Call [`show`] on the main thread after `NSApp` is initialized
+//! (`freddie_main_loop::init_menu_bar_app`). The returned [`MenuBar`] is `!Send`; dropping
+//! it removes the icon.
 
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -18,59 +10,45 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 /// How the status-item PNG is drawn.
 ///
 /// [`IconKind::Template`] is a monochrome glyph: macOS ignores RGB and paints the alpha
-/// mask in the menu bar's own color (white on a dark bar, black on a light one).
-/// [`IconKind::Color`] keeps the PNG's colors; the exterior should be transparent.
+/// mask in the menu bar's color. [`IconKind::Color`] keeps the PNG's colors.
 #[derive(Clone, Copy)]
 pub enum IconKind<'a> {
     Template(&'a [u8]),
     Color(&'a [u8]),
 }
 
-/// A live status item. Holding it keeps the icon up; dropping it takes the icon down and
-/// clears the menu handler.
+/// A live status item. Dropping it takes the icon down and clears the menu handler.
 pub struct MenuBar {
     tray: TrayIcon,
 }
 
 impl Drop for MenuBar {
-    /// Clears the global menu handler this `MenuBar` installed.
-    ///
-    /// `MenuEvent::set_event_handler` is one handler for the whole process, so leaving it
-    /// installed would keep `on_quit` alive after the icon is gone. The icon itself needs
-    /// nothing here: `TrayIcon` removes it when it drops.
+    /// Clears the process-global menu handler this `MenuBar` installed.
     fn drop(&mut self) {
         MenuEvent::set_event_handler(None::<fn(MenuEvent)>);
     }
 }
 
 impl MenuBar {
-    /// Set the text shown beside the glyph, or clear it with `None`.
-    ///
-    /// Main thread only, like everything else about a status item. `TrayIcon` is `!Send`, so
-    /// holding one is what keeps this reachable only from the thread that built it.
+    /// Set the text shown beside the glyph, or clear it with `None`. Main thread only.
     pub fn set_title(&self, title: Option<&str>) {
         self.tray.set_title(title);
     }
 }
 
-/// Shows the menu-bar status item with a single Quit entry.
+/// Show a menu-bar status item with a single Quit entry.
 ///
-/// One at a time: the menu handler is process-global, so a second `MenuBar` replaces the
-/// first one's and dropping either clears it. Build one and hold it.
-///
-/// `on_quit` runs, on the main thread, when the user chooses Quit. The caller supplies
-/// its own branding: `tooltip` is the hover text, and `icon` is the PNG (see [`IconKind`]).
+/// The menu handler is process-global, so a second `MenuBar` replaces the first one's.
+/// `on_quit` runs on the main thread when the user chooses Quit.
 ///
 /// # Errors
 ///
-/// Returns the underlying error if the icon, the menu, or the status item cannot be created.
+/// If the icon, the menu, or the status item cannot be created.
 pub fn show(
     tooltip: &str,
     icon: IconKind<'_>,
     on_quit: impl Fn() + Send + Sync + 'static,
 ) -> Result<MenuBar, Box<dyn std::error::Error + Send + Sync>> {
-    // The item and its id, so the handler can recognize it. `None` is the keyboard
-    // accelerator: a status-item menu does not need one.
     let quit = MenuItem::new("Quit", true, None);
     let quit_id = quit.id().clone();
 
@@ -89,8 +67,7 @@ pub fn show(
         .with_tooltip(tooltip)
         .build()?;
 
-    // muda delivers menu events through one global handler. It fires on the main
-    // thread, during menu tracking, which the NSApp pump (freddie_main_loop) drives.
+    // muda delivers menu events through one global handler, on the main thread.
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         if event.id == quit_id {
             on_quit();
@@ -100,19 +77,12 @@ pub fn show(
     Ok(MenuBar { tray })
 }
 
-/// A status-item icon from `png`: the glyph, trimmed to its shape and sized for the
-/// menu bar.
-///
-/// For a template, `png` should be a black glyph on a transparent background; for a
-/// color icon, the exterior should be transparent and the RGB is kept. Trimming to the
-/// non-transparent bounds and then scaling makes the glyph fill the bar rather than sit
-/// tiny inside the margins; a few pixels of padding keep it off the bar's top and bottom.
+/// Trim `png` to its opaque bounds and size it for the menu bar.
 fn prepare_icon(png: &[u8]) -> Result<Icon, Box<dyn std::error::Error + Send + Sync>> {
     let img = image::load_from_memory(png)?.into_rgba8();
     let glyph = crop_to_alpha(&img);
 
-    // tray-icon renders the icon at 18pt tall; a ~2x pixel height keeps it crisp on a
-    // Retina bar. Width follows from the glyph's aspect.
+    // tray-icon renders at 18pt; ~2x pixel height stays crisp on a Retina bar.
     let glyph_h: u32 = 30;
     let glyph_w = (glyph.width() * glyph_h)
         .div_ceil(glyph.height().max(1))
@@ -132,8 +102,7 @@ fn prepare_icon(png: &[u8]) -> Result<Icon, Box<dyn std::error::Error + Send + S
     Ok(Icon::from_rgba(canvas.into_raw(), w, h)?)
 }
 
-/// Crops an image to the bounding box of its non-transparent pixels. Returns a clone
-/// unchanged if the image is fully transparent.
+/// Crop to the bounding box of non-transparent pixels. Fully transparent: return a clone.
 fn crop_to_alpha(img: &image::RgbaImage) -> image::RgbaImage {
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0_u32, 0_u32);
     for (x, y, px) in img.enumerate_pixels() {

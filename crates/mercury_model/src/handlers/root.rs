@@ -1,4 +1,4 @@
-//! The root's `AnyKey` post: tracking the held modifiers.
+//! Root `AnyKey` post: tracking held modifiers.
 
 use freddie_keys::KeyEvent;
 use laserbeam::{Completed, CompletesTo};
@@ -7,13 +7,7 @@ use crate::MercuryEffect;
 use crate::state::MercuryPath;
 use bind::AscendState;
 
-/// Every key, claimed or not: keep `held` true.
-///
-/// `held` feeds the open and close sweeps a layer change runs, so it has to see a modifier
-/// pressed in a command layer, where a deeper binding may have claimed the key. That is what
-/// makes this a post: it is scheduled by the trigger alone and takes no claim.
-///
-/// The flags on the event stay authoritative for what a key carries; `held` is for the sweeps.
+/// Keep `held` current. A post so it sees modifiers a deeper binding claimed; the open/close sweeps need that.
 pub(crate) fn track_held_modifiers<'x>(
     ev: &KeyEvent,
     _snap: (),

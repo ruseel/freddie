@@ -1,8 +1,4 @@
-//! What a scheduled handler is handed: the state the items before it left, and
-//! the one claim they all share.
-//!
-//! The generated code that builds these is change 4's; these are the pieces on
-//! their own, over the shared `App -> Layer -> Nav` tree.
+//! `AscendState` and `exclusive` over the shared `App -> Layer -> Nav` tree.
 
 mod common;
 
@@ -37,7 +33,6 @@ fn nav_path(app: &mut App) -> NavPath<'_> {
 
 const KEY: KeyEvent = KeyEvent { key: "g" };
 
-/// Counts the key and stays where it is.
 fn count<'x>(
     ev: &KeyEvent,
     _snap: (),
@@ -70,8 +65,6 @@ fn an_exclusive_handler_runs_when_the_claim_is_free() {
     assert!(claim.is_taken());
 }
 
-/// The trap door: one exclusive per dispatch, so a second sees the claim gone and
-/// completes the state it was handed without running its handler.
 #[test]
 fn an_exclusive_handler_is_skipped_once_the_claim_is_taken() {
     let mut app = tree(0);
@@ -94,8 +87,6 @@ fn an_exclusive_handler_is_skipped_once_the_claim_is_taken() {
     }
 }
 
-/// A skipped handler forwards an invalidated state rather than resurrecting a
-/// path: what it completes to is the leave it was handed.
 #[test]
 fn a_skipped_handler_forwards_the_leave_it_was_handed() {
     let mut app = tree(0);
@@ -119,8 +110,6 @@ fn a_skipped_handler_forwards_the_leave_it_was_handed() {
     assert_eq!(app.hits, 9);
 }
 
-/// A handler that is scheduled without the gate runs whether or not the claim is
-/// gone, which is what a post does.
 #[test]
 fn a_handler_scheduled_without_the_gate_runs_with_the_claim_taken() {
     let mut app = tree(0);

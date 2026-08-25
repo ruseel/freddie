@@ -2,13 +2,6 @@
 import type { TabMessage } from "./TabMessage";
 
 /**
- * Everything an outside process may say to mercury. A sender cannot say anything else, so remote
- * key injection and remote quit are unrepresentable rather than filtered.
- *
- * `MercuryEvent` deliberately does not derive `Deserialize`: deriving it would make
- * `MercuryEvent::Key` and `MercuryEvent::Quit` constructible from the wire, and "no remote
- * keyboard, no remote kill" would be a rule some match arm enforces rather than something the
- * types say.
- *
+ * What an outside process may send. Separate from `MercuryEvent` so a wire frame cannot be a key or a quit.
  */
 export type IncomingEvent = { "kind": "IncomingEvent.Tab", "value": TabMessage };

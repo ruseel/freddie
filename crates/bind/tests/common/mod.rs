@@ -1,14 +1,9 @@
-//! A full laserbeam + bind tree shared by the accumulate and dispatch tests.
-//!
-//! Every node derives `Bind` (the path type the generated `Dispatch`
-//! needs) and `Bind`. Handlers mutate their node's `hits` where it has one and
-//! return the fired key's length, so a dispatch test can see which handler ran.
+//! Shared laserbeam + bind tree for the accumulate and dispatch tests. Handlers return the fired key's length so a dispatch test can see which one ran.
 #![expect(dead_code)]
 
 use bind::{AscendState, Bind, Bindings, EventTrigger};
 use laserbeam::{Above, Completed, CompletesTo, HasStop, MaybeInvalidated, PathMut};
 
-// Two sources: a keyboard and the foregrounded app.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct Keyboard(pub &'static str);
 pub struct KeyEvent {
@@ -33,7 +28,6 @@ impl EventTrigger for Foreground {
     }
 }
 
-// The unified trigger (accumulate) and event (dispatch).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum DemoTrigger {
     Keyboard(Keyboard),
@@ -81,12 +75,6 @@ impl Bindings for Demo {
     type Output = Vec<usize>;
 }
 
-// Handlers. Each is the one scheduled shape: the event, what its pre snapped, and the state the
-// descent left of its path. They return the fired key's length, so a dispatch test can see which
-// one ran, and the leave they completed to.
-//
-// A stayer completes where it stands; the `Invalidated` arm forwards the leave it was handed and
-// is unreachable for a leaf, whose state starts standing.
 pub fn on_esc<'x>(
     ev: &KeyEvent,
     _snap: (),
@@ -153,7 +141,6 @@ pub fn on_d<'x>(
         MaybeInvalidated::Invalidated(c) => (vec![ev.key.len()], c),
     }
 }
-/// A handler for the armed node: clears what it was waiting on, so a test can see it ran.
 pub fn on_armed<'x>(
     ev: &KeyEvent,
     _snap: (),
@@ -168,8 +155,7 @@ pub fn on_armed<'x>(
     }
 }
 
-/// A handler for nodes a dispatch test never fires. It reads nothing, so it binds at any place:
-/// the bounds are the two every stayer needs, and neither names a node.
+/// Binds at any place: reads nothing, names no node.
 pub fn ignore<P: HasStop + CompletesTo<P>>(
     ev: &KeyEvent,
     _snap: (),
@@ -178,7 +164,6 @@ pub fn ignore<P: HasStop + CompletesTo<P>>(
     (vec![ev.key.len()], st.complete())
 }
 
-// App -> Layer (enum) -> { Nav (leaf), Typing -> Box<Deep> (leaf) }.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -230,8 +215,6 @@ pub type NavPath<'a> = PathMut<Nav, LayerPath<'a>>;
 pub type TypingPath<'a> = PathMut<Typing, LayerPath<'a>>;
 pub type DeepPath<'a> = PathMut<Deep, TypingPath<'a>>;
 
-// A tiny second tree for the duplicate-trigger error: parent and child both bind
-// `dup`.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -249,14 +232,12 @@ pub struct ClashChild;
 
 pub type ClashPath<'a> = &'a mut Clash;
 pub type ClashChildPath<'a> = PathMut<ClashChild, ClashPath<'a>>;
-// A no-binds leaf root.
+
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
 pub struct Empty;
 
-// A multi-parent tree: `Title` is reached from both `Album` and `Song` through
-// the `TitleParent` route enum.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -299,12 +280,7 @@ pub enum TitleParent<'a> {
     Song(SongPath<'a>),
 }
 
-/// What a leave from `Title` hands upward once it has peeled past the route: which route it
-/// took, and how far it went from there.
-///
-/// The consumer writes this half, as it writes the route enum itself. A route enum is the one
-/// parent slot laserbeam cannot build a path through, so it cannot build the `Up` payload
-/// either: only the consumer knows which parents the slot can hold.
+/// `Above::Up` for `TitleParent`. The consumer writes this; laserbeam cannot, because a route enum is not a `PathMut`.
 pub enum TitleParentUp<'a> {
     Album(Completed<AlbumPath<'a>>),
     Song(Completed<SongPath<'a>>),
@@ -329,12 +305,7 @@ pub fn on_title<'x>(
     }
 }
 
-/// Title's leave, on `home`: out through whichever route is live, to the root.
-///
-/// `into_parent()` on a `TitlePath` yields the route enum, which has no `into_parent` of its
-/// own, so the leave matches it and wraps one `Up` level by hand. Both arms are live, one per
-/// route, and `IntoAncestor` does not cross a route enum, so no generic go-home handler could
-/// stand in for this.
+/// Leave from `Title` to the root. `into_parent()` yields the route enum, which has no `into_parent`, so the leave matches it and wraps one `Up` by hand.
 pub fn title_home<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -352,31 +323,24 @@ pub fn title_home<'x>(
     }
 }
 
-/// A keyboard trigger, for accumulate assertions.
 pub const fn kb(s: &'static str) -> DemoTrigger {
     DemoTrigger::Keyboard(Keyboard(s))
 }
-/// A foreground trigger, for accumulate assertions.
 pub const fn fg(s: &'static str) -> DemoTrigger {
     DemoTrigger::Foreground(Foreground(s))
 }
-/// A fired keyboard event, for dispatch.
 pub const fn key(s: &'static str) -> DemoEvent {
     DemoEvent::Keyboard(KeyEvent { key: s })
 }
-/// A `WaitingFor` trigger, for an accumulate assertion.
 #[must_use]
 pub const fn waiting(k: Option<&'static str>) -> DemoTrigger {
     DemoTrigger::WaitingFor(WaitingFor(k))
 }
 
-/// A fired foreground event, for dispatch.
 pub const fn foreground(s: &'static str) -> DemoEvent {
     DemoEvent::Foreground(FgEvent { app: s })
 }
 
-// A trigger whose value is read from the node it is bound on: it matches a key only while the node
-// is waiting for that key. The closure form is what supplies the value.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct WaitingFor(pub Option<&'static str>);
 
@@ -396,7 +360,6 @@ impl From<WaitingFor> for DemoTrigger {
 pub type ArmedPath<'a> = &'a mut Armed;
 pub type ArmedChildPath<'a> = PathMut<ArmedChild, ArmedPath<'a>>;
 
-/// A root whose binding reads its own state, beside a constant one, so the two forms coexist.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -406,22 +369,16 @@ pub type ArmedChildPath<'a> = PathMut<ArmedChild, ArmedPath<'a>>;
 )]
 pub struct Armed {
     pub waiting_for: Option<&'static str>,
-    /// What the CHILD's parent-reading binding watches for, kept separate so it cannot collide
-    /// with this node's own trigger.
+    /// Separate from `waiting_for` so the child's parent-reading bind cannot collide with this node's own trigger.
     pub for_child: Option<&'static str>,
     #[child]
     pub child: ArmedChild,
 }
 
-/// A deeper node, so a closure reads through a `PathMut` rather than a `&mut Root`.
-///
-/// Its second binding reads the level ABOVE through `parent`, which is what a shared path buys:
-/// the child answers with what its root is waiting for.
 #[derive(Bind)]
 #[node(parent_path = ArmedPath)]
 #[binds(Demo)]
 #[bind(
-    // An `Option` trigger: absent when the node holds nothing, and absent matches nothing.
     |armed_child_path| armed_child_path.get().wants.map(Keyboard) => on_child_armed,
     |armed_child_path| Keyboard(armed_child_path.parent().for_child.unwrap_or("none")) => on_parents_key,
 )]
@@ -429,7 +386,6 @@ pub struct ArmedChild {
     pub wants: Option<&'static str>,
 }
 
-/// Fires for the key the child's PARENT is waiting for, read through `parent()`.
 pub fn on_parents_key<'x>(
     ev: &KeyEvent,
     _snap: (),

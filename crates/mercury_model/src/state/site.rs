@@ -11,7 +11,7 @@ use super::{MercuryPath, ReturnHomeLayersPath, SiteLayerPath};
 pub(crate) const OVERLAY: &str = include_str!("overlays/site.txt");
 pub(crate) const CLAUDE_AI_OVERLAY: &str = include_str!("overlays/claude-ai.txt");
 
-/// The keymap the overlay shows for the site layer, given the site in the front tab.
+/// Overlay keymap for the site layer, given the site in the front tab.
 pub(crate) const fn overlay_for(site: Option<Site>) -> &'static str {
     match site {
         Some(Site::ClaudeAi) => CLAUDE_AI_OVERLAY,
@@ -19,14 +19,7 @@ pub(crate) const fn overlay_for(site: Option<Site>) -> &'static str {
     }
 }
 
-/// The per-tab layer, `u` from home.
-///
-/// Separate from the in-app layer on purpose. In-app is what Chrome the application can do, and it
-/// holds whatever is true of every tab; this holds what the site in the front tab can do, which
-/// changes as you move between tabs without the frontmost app changing at all.
-///
-/// It stores no site: [`site_data`] reads the front tab's URL from the root on every dispatch, so
-/// switching tabs while sitting in this layer changes what is bound with no event of its own.
+/// Per-tab layer. Stores no site; [`site_data`] reads the front tab URL on every dispatch, so a tab switch changes what is bound.
 #[derive(Bind, Debug)]
 #[node(parent_path = ReturnHomeLayersPath)]
 #[binds(MercuryStruct)]
@@ -40,8 +33,7 @@ impl SiteLayer {
     }
 }
 
-/// The site's level, which is not in the tree. A site with no bindings is not a variant, and
-/// [`site_data`] returns `None` for it.
+/// Derived site level. A site with no bindings is not a variant; [`site_data`] returns `None`.
 #[derive(Bind, Debug)]
 #[derived_node(parent_path = SiteLayerPath)]
 #[binds(MercuryStruct)]
@@ -49,11 +41,7 @@ pub enum SiteData {
     ClaudeAi(ClaudeAiSite),
 }
 
-/// Reads the front tab's URL, the only copy, and builds the level for the site it names.
-///
-/// `None` whenever Chrome is not the confirmed front app, whenever the tab source has not reported
-/// yet, and for a site with no bindings. The first two are the same "we do not know" that leaves a
-/// key unbound rather than aimed at whatever site was there before.
+/// Derived from the front tab URL. `None` if Chrome is not confirmed, no URL yet, or the site has no bindings.
 fn site_data<'a, P: HasAncestor<MercuryPath<'a>>>(path: &P) -> Option<SiteData> {
     let root = path.ancestor();
     let url = root
@@ -68,7 +56,6 @@ fn site_data<'a, P: HasAncestor<MercuryPath<'a>>>(path: &P) -> Option<SiteData> 
     }
 }
 
-/// claude.ai's level, where `n` starts a new chat.
 #[derive(Bind, Debug)]
 #[derived_node(parent_path = SiteLayerPath)]
 #[binds(MercuryStruct)]

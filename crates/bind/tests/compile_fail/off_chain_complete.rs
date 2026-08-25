@@ -1,5 +1,4 @@
-// A focus deeper than the origin cannot complete that leave: no `CompletesTo`
-// impl (E0277).
+// A focus deeper than the origin cannot complete that leave: no `CompletesTo` impl.
 use laserbeam::{CompletesTo, Completed, PathMut};
 
 struct App {

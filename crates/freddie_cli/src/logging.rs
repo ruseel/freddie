@@ -1,11 +1,6 @@
-//! Where a daemon's tracing goes, and where the verbs that talk to it write.
+//! Tracing for a daemon: a log file at [`FILE_LEVEL`], and a terminal filtered by [`LOG_LEVEL`].
 //!
-//! Two sinks with independent filters. The file always records [`FILE_LEVEL`], so
-//! the record of a run survives however quiet the terminal was asked to be. The
-//! terminal shows whatever [`LOG_LEVEL`] asks for, defaulting to `info`.
-//!
-//! One file per daemon, with as many writers as there are processes talking to it, so
-//! every record it takes is stamped with the pid of the process that wrote it.
+//! One file per daemon. Every record is stamped with the pid of the process that wrote it.
 
 use std::cell::RefCell;
 use std::io;
@@ -20,24 +15,16 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer, fmt};
 
-/// What the terminal shows when [`LOG_LEVEL`] says nothing. Shared with `logs`, so a
-/// daemon's own terminal and a follower of its file show the same records by default.
+/// Terminal filter when [`LOG_LEVEL`] is unset. Shared with `logs`.
 pub(crate) const DEFAULT_LOG_LEVEL: &str = "info";
 
-/// What the log file records, always. Deliberately not tied to the terminal's
-/// filter: the file is the record of what happened, so quieting the terminal must
-/// never quiet it.
+/// What the log file records. Independent of the terminal filter.
 const FILE_LEVEL: LevelFilter = LevelFilter::DEBUG;
 
-/// Wraps a writer so every record carries the pid of the process that wrote it, and the
-/// app name as `target` in place of a crate module path.
-///
-/// The file has as many writers as there are processes on one daemon, and a record says
-/// which module emitted it but not which process. Two clients running at once are
-/// otherwise the same line. The target is rewritten here because tracing's `target:` is a
-/// compile-time callsite string, so a library cannot name the app at the macro. This crate's
-/// records keep the module (`::client`, `::daemon`) under the app name, so `logs` can tell
-/// the daemon from the verbs around it.
+/// Writer wrapper that stamps each record with this process's pid and rewrites `target`
+/// to the app name. Tracing's `target:` is a compile-time callsite string, so a library
+/// cannot name the app at the macro. This crate's records keep the module (`::client`,
+/// `::daemon`) under the app name.
 struct WithPid<W> {
     inner: W,
     target: String,
@@ -54,23 +41,15 @@ impl<'a, W: MakeWriter<'a>> MakeWriter<'a> for WithPid<W> {
     }
 }
 
-/// The stamped writer. `fmt` calls `write` once per record, so this stamps once per
-/// record.
 struct PidStamped<'a, W> {
     inner: W,
     target: &'a str,
 }
 
 impl<W: io::Write> io::Write for PidStamped<'_, W> {
-    /// One `write_all` for the stamp and the record together.
-    ///
-    /// Two calls would be two appends, and another process may append between them,
-    /// which would leave a stamp attached to a stranger's record. Building the line
-    /// first is what keeps a record whole against the other writers this exists for.
-    ///
-    /// A record that does not start with `{` is written through untouched. The formatter always
-    /// produces one that does, and a record that somehow did not would be destroyed by having its
-    /// first byte replaced.
+    /// One `write_all` for the stamp and the record together. Two appends would let
+    /// another process write between them. A record that does not start with `{` is
+    /// written through untouched; splicing would destroy it.
     fn write(&mut self, record: &[u8]) -> io::Result<usize> {
         STAMPED.with_borrow_mut(|line| {
             line.clear();
@@ -95,13 +74,11 @@ impl<W: io::Write> io::Write for PidStamped<'_, W> {
 const TARGET_KEY: &[u8] = b"\"target\":\"";
 const FREDDIE_CLI: &[u8] = b"freddie_cli";
 
-/// What kind of tracing target a record carried, and therefore how [`put_target`] rewrites it.
+/// How [`put_target`] rewrites a record's tracing target.
 enum RecordTarget {
-    /// The app crate's module path (`isograph_cli`, `figaro::daemon`): the whole value
-    /// becomes the app name.
+    /// App crate module path (`isograph_cli`, `figaro::daemon`): the whole value becomes the app name.
     AppCrate,
-    /// This crate's module path (`freddie_cli::client`): `freddie_cli` becomes the app name
-    /// and the module stays, so the record reads as `isograph::client`.
+    /// This crate's module path (`freddie_cli::client`): `freddie_cli` becomes the app name and the module stays.
     FreddieCli,
     /// An explicit `target:` or a foreign crate.
     Other,
@@ -142,17 +119,11 @@ fn record_target(current: &[u8], app: &str) -> RecordTarget {
 }
 
 thread_local! {
-    /// The line being assembled, reused across records.
-    ///
-    /// A daemon may log at `debug` on every event it takes, so a buffer per record would
-    /// allocate there. Thread-local because a daemon writes from more than one thread.
+    /// Reused across records so a debug-per-event daemon does not allocate per line.
     static STAMPED: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-/// This process's stamp: the opening brace of the record's object and the pid inside it, so
-/// splicing it in front of a record whose own opening brace has been taken off puts the pid first.
-///
-/// Built once. A pid does not change under a running process.
+/// `{"pid":N,` spliced in front of a record whose own opening brace has been stripped.
 fn stamp() -> &'static str {
     static STAMP: OnceLock<String> = OnceLock::new();
     STAMP.get_or_init(|| format!("{{\"pid\":{},", std::process::id()))
@@ -160,14 +131,11 @@ fn stamp() -> &'static str {
 
 /// Send tracing to this daemon's log file and to this process's terminal.
 ///
-/// A daemon reads its directives from [`LOG_LEVEL`], a `tracing_subscriber` filter
-/// string, so `info` and `warn,some_crate=debug` are both accepted. One that does not
-/// parse falls back to [`DEFAULT_LOG_LEVEL`] and says so, since the alternative is a run
-/// with no logging.
+/// A daemon reads [`LOG_LEVEL`] as a `tracing_subscriber` filter string. A value that
+/// does not parse falls back to [`DEFAULT_LOG_LEVEL`].
 pub(crate) fn init(instance: &Instance, terminal: Terminal) {
     let dir = instance.log_dir();
-    // Held rather than said: there is no subscriber yet to say them to, and a setup
-    // failure belongs in the file as much as anything else does.
+    // No subscriber yet; a setup failure is logged after `init` below.
     let mut setup = Vec::new();
     if let Err(e) = std::fs::create_dir_all(dir) {
         setup.push(format!("could not create {}: {e}", dir.display()));
@@ -175,9 +143,7 @@ pub(crate) fn init(instance: &Instance, terminal: Terminal) {
 
     let file = fmt::layer()
         .json()
-        // One flat object per record: `flatten_event` lifts the event's own fields up beside
-        // `timestamp` and `target` rather than nesting them under `fields`, and dropping the span
-        // keys leaves nothing else in the object.
+        // Flat object: event fields sit beside `timestamp` and `target`, not nested under `fields`.
         .flatten_event(true)
         .with_current_span(false)
         .with_span_list(false)
@@ -206,30 +172,19 @@ pub(crate) fn init(instance: &Instance, terminal: Terminal) {
         Terminal::Client => registry.with(client_terminal()).init(),
     }
 
-    // The subscriber exists now, so anything held above can finally be said.
     for problem in setup {
         warn!("{}: {problem}", instance.display_name());
     }
     log_panics();
 }
 
-/// Log every panic, then abort the process.
+/// Log every panic, then abort.
 ///
-/// The default hook prints and nothing else, which for a detached daemon means the one
-/// record of why it died goes to a terminal nobody is attached to. Routed through
-/// `error!`, it reaches the log file like everything else, and a client verb still shows
-/// it because `error!` is what goes to a client's stderr.
-///
-/// Then it aborts. A panic is a bug, and freddie's work is split across a main thread and a worker
-/// that unwinding cannot both reach: a panic on the worker happens to tear everything down, but one
-/// on the main thread would leave the worker holding the keyboard, and a panic unwinding through an
-/// `AppKit` or `AXObserver` C frame is undefined behavior. Aborting from the hook, before any unwind,
-/// ends the process wherever the panic fired. The record is already on disk: the file layer writes
-/// each record straight through, so `error!` above has reached the OS file before `abort` runs.
-///
-/// Only the daemon and the client verbs install this, through `init`; the tests do not, so
-/// `catch_unwind` still works there. The backtrace follows `RUST_BACKTRACE`, the way the default
-/// hook's does.
+/// A detached daemon has no terminal for the default hook. Aborting (not unwinding) is
+/// required: a panic on the main thread would leave the worker holding the keyboard, and
+/// unwinding through an `AppKit` or `AXObserver` C frame is undefined behavior. The file
+/// layer writes each record straight through, so `error!` has reached the OS before `abort`.
+/// Tests do not install this hook, so `catch_unwind` still works there.
 fn log_panics() {
     std::panic::set_hook(Box::new(|info| {
         let message = info
@@ -252,10 +207,6 @@ mod tests {
     use super::{PidStamped, WithPid};
     use std::io::Write;
 
-    // The real json layer, through the real pid stamp, produces a line shaped the way
-    // `client::Record` reads it. This pins the record shape against a
-    // `tracing-subscriber` that changes its JSON: the event's own fields sit at the top level, and
-    // they keep the order they were logged, which is what puts `event` before `effects`.
     #[test]
     fn the_file_layer_writes_a_flat_record_in_logged_order() {
         let path =
@@ -298,8 +249,6 @@ mod tests {
         assert!(at("event") < at("effects"), "event should precede effects");
     }
 
-    // A record with no leading brace would be destroyed by having its first byte replaced, so it is
-    // written through untouched instead.
     #[test]
     fn a_line_that_is_not_an_object_is_written_through() {
         let mut written = Vec::new();
@@ -362,36 +311,21 @@ mod tests {
     }
 }
 
-/// The environment variable a daemon reads its terminal filter from.
-///
-/// Not a flag: the only invocation with a terminal to filter is one a person typed in
-/// front of, and `daemon` is hidden, spawned by `start` with its output at /dev/null, and
-/// run by launchd with no terminal at all. A variable serves the one case a flag would.
+/// Environment variable for a daemon's terminal filter. Not a flag: `daemon` is hidden
+/// and has no terminal (`start` sends its output to /dev/null).
 pub const LOG_LEVEL: &str = "LOG_LEVEL";
 
-/// What the terminal shows, which is not the same for the process that is the daemon
-/// and the processes that talk to it.
+/// What this process's terminal is for.
 #[derive(Clone, Copy)]
 pub(crate) enum Terminal {
-    /// The daemon. Its terminal is a view of its log: every record in full, filtered by
-    /// what [`LOG_LEVEL`] asked for.
+    /// Full records, filtered by [`LOG_LEVEL`].
     Daemon,
-    /// A client verb. Its terminal is its output: `INFO` is the answer and goes to
-    /// stdout, `WARN` and above are problems and go to stderr, and both are shown as the
-    /// bare message.
+    /// `INFO` to stdout, `WARN` and above to stderr, bare message only.
     Client,
 }
 
-/// The layers a client verb shows on its terminal.
-///
-/// `without_time`, `with_level(false)`, `with_target(false)`: a verb's output is the
-/// thing the user asked for, and a timestamp and a level in front of it would make
-/// `status` unusable in a pipeline. The file layer keeps all of it, so nothing is lost
-/// by leaving it off here.
-///
-/// Two layers rather than one, because a result belongs on stdout and a problem on
-/// stderr, and a layer has one writer. `INFO` exactly, rather than `INFO` and above, so
-/// the split is total: no record reaches both.
+/// Client terminal: no timestamp/level/target, so `status` stays pipeline-usable.
+/// Two layers because a layer has one writer: `INFO` exactly to stdout, `WARN`+ to stderr.
 fn client_terminal<S>() -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,

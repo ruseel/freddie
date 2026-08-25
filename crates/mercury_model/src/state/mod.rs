@@ -1,8 +1,4 @@
-//! The state tree: the nodes, their bindings, and the path aliases that chain them.
-//!
-//! The `#[bind(.. => handler)]` attributes name handlers that live in [`crate::handlers`], so
-//! this module glob-imports them: the derive generates a call to each named handler here, at
-//! the node's definition site.
+//! State tree. Glob-imports handlers because the derive emits calls at each node's definition site.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -15,9 +11,6 @@ use freddie_sync::{GenerationMinter, HeldGeneration, RidingGeneration, Synced};
 use freddie_windows_types::{Frame, Monitor, Pid, Placement, WindowId};
 use laserbeam::PathMut;
 
-// The derive generates a call to each named handler at its node's definition site below, so
-// every handler has to be in scope here. A glob keeps this in step with the handler set instead
-// of a name-by-name list that drifts.
 use crate::effect::emit;
 #[allow(clippy::wildcard_imports)]
 use crate::handlers::*;
@@ -46,9 +39,7 @@ pub use typing::{JK_TIMEOUT, TypingLayer};
 /// How long a chooser layer sits idle before returning home.
 pub const RETURN_TO_HOME_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Arm the return-to-home timer a layer holds: the guard cancels it on drop, and the effect
-/// schedules it. It fires after [`RETURN_TO_HOME_TIMEOUT`], and the layer that set it binds that
-/// firing home, matching on the guard it still holds.
+/// Arm the return-home timer. Dropping the guard cancels it; the layer binds the firing on the guard it still holds.
 pub(crate) fn arm_return_home() -> (TimerGuard, MercuryEffect) {
     let (guard, effect) = timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, ());
     (guard, MercuryEffect::Timer(effect))
@@ -70,62 +61,34 @@ pub const OVERLAY_DWELL: Duration = Duration::from_secs(10);
     |mercury_path| mercury_path.overlay_timer().map(TimerGuard::trigger) => if_not_invalidated(hide_overlay),
     |mercury_path| mercury_path.windows.pending_timer().map(TimerGuard::trigger) => if_not_invalidated(placement_settled),
 )]
-// `o` and escape bind once, here: in typing, its catch-all claims both keys before the root's
-// rows run, so an `o` is an `o` and an escape is the app's.
+// `o` and escape bind once here. Typing's catch-all claims both first, so there they reach the app.
 #[bind(
     Key::KeyO.down() => if_not_invalidated(toggle_overlay),
     Key::Escape.down() => if_not_invalidated(go_home),
 )]
 #[post(AnyKey => track_held_modifiers)]
 pub struct Mercury {
-    /// The watcher-confirmed frontmost app, or `None` while a nav choice's `Foreground` effect is
-    /// in flight: the choice sets it to `None`, and the watcher's report sets it back to `Some`,
-    /// so nothing binds against the app being left in the gap.
+    /// Confirmed front app. `None` while a nav is in flight, so the app being left does not bind in the gap.
     pub foreground: Option<FrontApp>,
-    /// The sync tokens' mint (`freddie_sync`): a counter, so minting is a function of state.
     pub generations: GenerationMinter,
-    /// Every window mercury knows about, and the monitors they sit on. See [`Windows`].
     pub windows: Windows,
-    /// The physical truth about which modifier keys are down, kept current by the
-    /// `track_held_modifiers` post on every key in every layer. Entering and leaving typing
-    /// reads it to synchronize the app's modifier view. See [`HeldModifiers`].
+    /// Physical modifier keys down. Entering and leaving typing uses this to sync the app's view.
     pub held: HeldModifiers,
-    /// The overlay currently up, if any: the guard for its pending hide. The overlay is an
-    /// external window driven by effects, so this is its only trace in the model, held at the root
-    /// because there is one overlay across all layers.
-    ///
-    /// Private for the reason `layer` is: the effects a change implies come back from the method
-    /// that made it.
+    /// Guard for the overlay's pending hide, or `None` if it is down. One overlay, so this lives at the root.
     overlay: Option<TimerGuard>,
-    /// The active layer. Private, and written only through [`set_layer`](Mercury::set_layer), so
-    /// no transition can change the layer without going through the modifier flush.
+    /// Active layer. Written only through [`set_layer`](Mercury::set_layer), which flushes modifiers.
     #[child]
     layer: Layer,
 }
 
-/// What mercury knows about the frontmost Chrome.
-///
-/// It exists only inside [`ForegroundedApp::Chrome`], so there is no tab URL to be meaningless
-/// while Finder is up, and nothing to clear when Chrome goes away: the value goes with it.
+/// Chrome-only state. Nested under [`ForegroundedApp::Chrome`] so a tab URL cannot exist while Finder is up.
 #[derive(Debug, Default)]
 pub struct ForegroundedChrome {
-    /// The front tab's URL, raw, as the tab source sent it.
-    ///
-    /// `None` until that source reports, which is also the state right after Chrome comes up: the
-    /// active tab is Chrome's to know, and no app-activation event carries it. A site level
-    /// resolves only once this is `Some`, so a key pressed in the gap is unbound rather than aimed
-    /// at whatever site was there before.
-    ///
-    /// A `String` rather than a parsed URL: [`Site::from_url`] matches a host, which is a scan of a
-    /// short string, and keeping it raw leaves the whole URL for handlers that want it.
+    /// Front tab URL. `None` until the tab source reports, including right after Chrome comes up; a site level is unbound in that gap.
     pub url: Option<String>,
 }
 
-/// The frontmost app, and whatever mercury knows about it.
-///
-/// [`App`] stays the identity that events and effects speak, because neither the watcher reporting
-/// an activation nor an effect asking for one knows anything about a tab. This is the same set of
-/// apps with the state hung off the one that has any.
+/// Frontmost app, with per-app state hung off the variants that have any.
 #[derive(Debug, Default)]
 pub enum ForegroundedApp {
     Chrome(ForegroundedChrome),
@@ -137,7 +100,6 @@ pub enum ForegroundedApp {
 }
 
 impl ForegroundedApp {
-    /// Which app this is, dropping whatever it carries.
     #[must_use]
     pub const fn identity(&self) -> App {
         match self {
@@ -149,7 +111,6 @@ impl ForegroundedApp {
         }
     }
 
-    /// The Chrome state, if this is Chrome.
     #[must_use]
     pub const fn chrome(&self) -> Option<&ForegroundedChrome> {
         match self {
@@ -158,7 +119,6 @@ impl ForegroundedApp {
         }
     }
 
-    /// The state to hold for a newly foregrounded `app`, knowing only its identity.
     #[must_use]
     pub const fn from_identity(app: App) -> Self {
         match app {
@@ -171,8 +131,6 @@ impl ForegroundedApp {
     }
 }
 
-/// The frontmost app: its pid, the identity the OS's per-app reports speak, and what mercury
-/// knows about it.
 #[derive(Debug)]
 pub struct FrontApp {
     pub pid: Pid,
@@ -180,7 +138,6 @@ pub struct FrontApp {
 }
 
 impl FrontApp {
-    /// The state to hold for a newly foregrounded app, knowing its identity and pid.
     #[must_use]
     pub fn new(app: App, pid: Pid) -> Self {
         Self {
@@ -190,75 +147,43 @@ impl FrontApp {
     }
 }
 
-/// What mercury knows about the windows on screen.
-///
-/// Filled entirely by the window source: a snapshot at startup and a change per event after
-/// it. Handlers read it and never read the OS, so what a placement computes is a function of
-/// state and event like everything else.
+/// Windows on screen, filled by the window source.
 #[derive(Default)]
 pub struct Windows {
-    /// Every open window: where it is (or the pending gap since its last change fact), and
-    /// where it goes back to.
     open: HashMap<WindowId, WindowState>,
-    /// Each app's focused window, keyed by pid, synced in two phases. `Known(None)` is a real
-    /// answer: the app has no focused window with a readable id. Entries leave with `AppGone`.
+    /// Each app's focused window, keyed by pid. `Known(None)` is a real answer: the app has no focused window with a readable id. Entries leave with `AppGone`.
     focused: HashMap<Pid, Synced<Option<WindowId>>>,
-    /// The monitors, in the order the source reported them.
     screens: Vec<Monitor>,
-    /// The placement mercury has asked for and not yet seen land. See [`PendingPlacement`].
     pending: Option<PendingPlacement>,
 }
 
-/// Every dispatched event logs the whole state on one line, and the derived `Debug` for this puts
-/// every open window, its frame, and its restore frame on that line. That is a hundred numbers
-/// nobody reads, and it buries the fields of the record that are the point of it.
-///
-/// So this prints its name and nothing else. What a window is doing is already in the log: the
-/// window source logs each change as it arrives, and a placement logs the frame it asked for.
+/// Prints `Windows` only. A full dump of every frame would bury the rest of a dispatch record.
 impl fmt::Debug for Windows {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Windows")
     }
 }
 
-/// One window: where it is now (or the pending gap since its last change fact), and where a
-/// restore would put it.
 #[derive(Debug)]
 struct WindowState {
-    /// Where the window is: the last committed read, or the pending gap since its last
-    /// change fact.
     frame: Synced<Frame>,
-    /// Where the window was before mercury first moved it. `None` once it is back there, or
-    /// once the user has moved it since.
+    /// Frame before mercury first moved it. `None` once it is back there, or once the user has moved it since.
     restore: Option<Frame>,
 }
 
-/// A [`MercuryEffect::SetFrame`] that has been asked for and not yet landed.
-///
-/// While one is outstanding, every move reported for its window is mercury's own doing, so
-/// the remembered frame survives it. One placement produces several reports, and only the
-/// last is the frame that was asked for.
+/// A [`MercuryEffect::SetFrame`] not yet settled. Moves of this window are mercury's until the timer fires.
 #[derive(Debug)]
 struct PendingPlacement {
     window: WindowId,
-    /// Held for its `Drop` and for the trigger that matches its firing: the wait ends when
-    /// this fires, and only then.
+    /// Wait ends when this fires. Drop cancels it.
     timer: TimerGuard,
 }
 
-/// How long a placement has to land before the window is the user's again.
-///
-/// It bounds how long a drag can be mistaken for mercury's own placement, so shorter is
-/// better, but it has to cover two position-and-size writes and the reports they produce.
+/// How long a placement has to land. Must cover two position-and-size writes and their reports.
 pub const PLACEMENT_SETTLE: Duration = Duration::from_millis(250);
 
 impl Windows {
-    /// The front app's focused window and its frame, which is what every placement starts
-    /// from.
-    ///
-    /// `None` while either sync is pending, when the front app has no focused window, and
-    /// when the focus names a window no `Opened` ever did — every one the same "not now" a
-    /// placement answers by placing nothing.
+    /// Focused window and its frame. `None` while either sync is pending, if there is no focused window, or if focus names a window that was never opened.
     #[must_use]
     pub fn focused(&self, front: Pid) -> Option<(WindowId, Frame)> {
         let window = (*self.focused.get(&front)?.known()?)?;
@@ -266,8 +191,7 @@ impl Windows {
         Some((window, frame))
     }
 
-    /// The monitor a frame's top-left corner is on, or the first monitor if it is on none.
-    /// `None` only before the first `Screens` report.
+    /// Monitor a frame's top-left is on, or the first monitor if it is on none. `None` only before the first `Screens` report.
     #[must_use]
     pub fn monitor_for(&self, frame: Frame) -> Option<Monitor> {
         self.screens
@@ -287,8 +211,7 @@ impl Windows {
         );
     }
 
-    /// Whether the window is tracked, which is whether the caller should request the read;
-    /// an untracked window's halves both die unused.
+    /// Whether the window is tracked (whether the caller should request the read).
     pub(crate) fn frame_change(&mut self, window: WindowId, held: HeldGeneration) -> bool {
         let ours = self.pending_covers(window);
         let Some(state) = self.open.get_mut(&window) else {
@@ -335,42 +258,27 @@ impl Windows {
         self.focused.remove(&pid);
     }
 
-    /// The monitors changed, with the new arrangement in hand: reading them is synchronous in
-    /// the watcher's callback, so no gap exists and the value rides the event.
+    /// Screens changed. The watcher reads them synchronously, so the value rides the event.
     pub(crate) fn screens_changed(&mut self, screens: &[Monitor]) {
         self.screens = screens.to_vec();
     }
 
-    /// Whether `moved` is a report of mercury's own outstanding placement.
-    ///
-    /// Every report for the pending window counts, and the wait ends on the timer rather
-    /// than on the frame that was asked for. One placement writes the position and the size
-    /// twice, so the frame asked for is reported more than once; ending the wait on the
-    /// first of them would leave the rest looking like the user dragging the window, and
-    /// they would forget the frame the restore needs.
+    /// Whether `moved` is mercury's outstanding placement. The wait ends on the timer, not on the asked-for frame: one placement writes position and size twice, and ending on the first report would treat the rest as a user drag.
     fn pending_covers(&self, moved: WindowId) -> bool {
         self.pending
             .as_ref()
             .is_some_and(|pending| pending.window == moved)
     }
 
-    /// The guard for the placement still outstanding, for the trigger that matches its
-    /// firing.
     pub(crate) fn pending_timer(&self) -> Option<&TimerGuard> {
         self.pending.as_ref().map(|p| &p.timer)
     }
 
-    /// The placement mercury asked for has had its time: what the window does next is the
-    /// user's.
     pub(crate) fn forget_pending(&mut self) {
         self.pending = None;
     }
 
-    /// Ask for `target`, and wait for it to land.
-    ///
-    /// The wait is what keeps the moves this causes from counting as the user's. Both
-    /// callers need it; what they differ on is the remembered frame, which this leaves
-    /// alone.
+    /// Ask for the placement and start the settle wait. Leaves the remembered frame alone.
     fn asking_for(&mut self, placement: Placement) -> Vec<MercuryEffect> {
         let (timer, effect) = timer_effect_and_guard(PLACEMENT_SETTLE, ());
         self.pending = Some(PendingPlacement {
@@ -383,11 +291,7 @@ impl Windows {
         ]
     }
 
-    /// Remember where the window is now, then place it.
-    ///
-    /// The frame it has now becomes the one a restore goes back to, unless one is already
-    /// remembered: a run of placements all restore to where the window was before the first
-    /// of them.
+    /// Remember the current frame if none is remembered, then place. A run of placements restore to where the window was before the first.
     pub(crate) fn placing(&mut self, placement: Placement) -> Vec<MercuryEffect> {
         let Some(state) = self.open.get_mut(&placement.window) else {
             return Vec::new();
@@ -396,11 +300,7 @@ impl Windows {
         self.asking_for(placement)
     }
 
-    /// Take the focused window's remembered frame, and return the effects that put it back.
-    ///
-    /// Empty when nothing is focused or the window has no remembered frame: nothing placed
-    /// it, or it is already back. Taking, not reading: a restored window is where it
-    /// started, so there is nothing left to put it back to.
+    /// Put the focused window back. Takes the remembered frame, so a second restore has nothing to do.
     pub(crate) fn restoring(&mut self, front: Pid) -> Vec<MercuryEffect> {
         let Some((window, from)) = self.focused(front) else {
             return Vec::new();
@@ -426,19 +326,13 @@ pub enum Layer {
 }
 
 impl Layer {
-    /// A passthrough layer hands every key to the app, so entering and leaving one synchronizes
-    /// the app's view of the held modifiers (see [`Mercury::set_layer`]). Typing is the only one;
-    /// add more by returning true for them.
+    /// Whether keys pass through to the app. Entering and leaving one flushes modifiers. Typing is the only such layer.
     #[must_use]
     pub const fn is_passthrough(&self) -> bool {
         matches!(self, Self::Typing(_))
     }
 
-    /// The keymap the overlay shows for this layer, read when `o` shows it.
-    ///
-    /// `foreground` is the confirmed front app, which only the in-app and site arms read; while a
-    /// nav is in flight they fall back to their generic cards. Typing never binds `o`, so its arm
-    /// is unreachable.
+    /// Overlay keymap. In-app and site arms fall back to the generic card while a nav is in flight.
     #[must_use]
     pub fn overlay_content(&self, foreground: Option<&ForegroundedApp>) -> &'static str {
         match self {
@@ -450,7 +344,7 @@ impl Layer {
                 ReturnHomeLayers::InApp(_) => {
                     app::overlay_for(foreground.map_or(App::Other, ForegroundedApp::identity))
                 }
-                // The site layer's keymap is the front tab's, so it needs the URL, not just the app.
+                // Site keymap is the front tab's, so it needs the URL.
                 ReturnHomeLayers::Site(_) => site::overlay_for(
                     foreground
                         .and_then(ForegroundedApp::chrome)
@@ -461,7 +355,6 @@ impl Layer {
         }
     }
 
-    /// What the status item calls this layer.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
@@ -477,7 +370,7 @@ impl Layer {
     }
 }
 
-/// The root's path is `&mut Self`; naming it lets the root's children say `parent = MercuryPath`.
+/// `&mut Mercury`; children name this as their parent path.
 pub type MercuryPath<'a> = &'a mut Mercury;
 pub type LayerPath<'a> = PathMut<Layer, MercuryPath<'a>>;
 pub type TypingLayerPath<'a> = PathMut<TypingLayer, LayerPath<'a>>;
@@ -487,25 +380,15 @@ pub type AppLayerPath<'a> = PathMut<AppLayer, ReturnHomeLayersPath<'a>>;
 pub type SiteLayerPath<'a> = PathMut<SiteLayer, ReturnHomeLayersPath<'a>>;
 
 impl Mercury {
-    /// The layer a fresh mercury boots into: Typing, the passthrough layer, so a fresh mercury
-    /// (and one launched at login) leaves the keyboard working rather than swallowing everything
-    /// in Home. See launch-at-login.
+    /// Boot layer: Typing, so a mercury launched at login does not swallow the keyboard.
     fn boot_layer() -> Layer {
         Layer::Typing(TypingLayer::new())
     }
 
-    /// The title the status item shows before the first layer change.
-    ///
-    /// The main thread paints this when it creates the status item, before the model that would
-    /// otherwise hand it over exists. A literal rather than `boot_layer().name()`, which is not a
-    /// const expression; `boot_title_matches_the_boot_layer` keeps the two from drifting.
+    /// Status item title before the first layer change. A literal because `boot_layer().name()` is not const; `boot_title_matches_the_boot_layer` guards drift.
     pub const BOOT_TITLE: &'static str = "Typing";
 
-    /// The model at boot, told what the sources already know.
-    ///
-    /// `front_app` is read before the main loop runs; see `refactors/past/seed-at-construction.md`.
-    /// No `Default`, because a `Mercury` that has not been told what is frontmost would
-    /// resolve its in-app layer against the wrong app until something corrected it.
+    /// Model at boot. No `Default`: an untold front app would resolve the in-app layer against the wrong app.
     #[must_use]
     pub fn new(front: Option<FrontApp>, windows: Windows) -> Self {
         Self {
@@ -518,8 +401,7 @@ impl Mercury {
         }
     }
 
-    /// A fresh Mercury with `layer` active, and no particular app frontmost. For tests; a live
-    /// transition goes through [`set_layer`](Self::set_layer).
+    /// For tests. A live transition goes through [`set_layer`](Self::set_layer).
     #[must_use]
     pub fn with_layer(layer: Layer) -> Self {
         Self {
@@ -528,8 +410,6 @@ impl Mercury {
         }
     }
 
-    /// Dispatches one event, returning the effects it produced, which are the caller's to
-    /// perform.
     #[must_use]
     pub fn handle(&mut self, event: &MercuryEvent) -> Vec<MercuryEffect> {
         bind::dispatch::<MercuryStruct, Self, _>(self, event)
@@ -540,10 +420,6 @@ impl Mercury {
         &self.layer
     }
 
-    /// Show the active layer's keymap, or take it down if it is already up.
-    ///
-    /// `o` is a toggle: it is the key you press to ask what is bound, so it is the key you press
-    /// again when you are done reading.
     #[must_use = "the returned effects put the overlay up or take it down"]
     pub fn toggle_overlay(&mut self) -> Vec<MercuryEffect> {
         if self.overlay.is_some() {
@@ -560,8 +436,7 @@ impl Mercury {
         ]
     }
 
-    /// Take the overlay down if one is up. The dwell firing and every layer change come through
-    /// here, and taking the field drops the guard, cancelling a hide that has not fired yet.
+    /// Take the overlay down. Taking the field drops the guard, cancelling a hide that has not fired.
     #[must_use = "the returned effect takes the overlay off the screen"]
     pub fn hide_overlay(&mut self) -> Vec<MercuryEffect> {
         if self.overlay.take().is_some() {
@@ -571,16 +446,12 @@ impl Mercury {
         }
     }
 
-    /// The guard for the overlay's pending hide, which its binding matches on.
     #[must_use]
     pub const fn overlay_timer(&self) -> Option<&TimerGuard> {
         self.overlay.as_ref()
     }
 
-    /// Replace the active layer, returning the modifier flush the change implies. It flushes only
-    /// when the passthrough state changed: `close` on leaving a passthrough layer (a command layer
-    /// swallows the real modifier ups, so release them here), `open` on entering one (catch the app
-    /// up on what is held), nothing otherwise. The one place `layer` is written.
+    /// Replace the active layer. Flushes modifiers only when entering or leaving a passthrough layer: `close` on leaving typing, `open` on entering it.
     #[must_use = "the returned flush has to be emitted, or a held modifier is stranded down"]
     pub fn set_layer(&mut self, into: impl Into<Layer>) -> Vec<MercuryEffect> {
         let into = into.into();
@@ -598,14 +469,13 @@ impl Mercury {
     }
 }
 
-/// One modifier's two physical keys. A modifier's flag is set while EITHER side is down.
+/// Left and right keys of one modifier. The flag is set while either is down.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct LeftRightPair {
     pub left: bool,
     pub right: bool,
 }
 
-/// Which physical key of a left/right modifier pair.
 #[derive(Clone, Copy)]
 pub enum Side {
     Left,
@@ -626,8 +496,7 @@ impl LeftRightPair {
     }
 }
 
-/// The physical truth about which modifier keys are down. `caps_lock` is a lock, not a held key,
-/// so it is not here: it changes on press and has no held down/up to replay.
+/// Physical modifier keys down. Caps lock is a lock, not a held key, so it is not here.
 #[derive(Default, Clone, Copy)]
 pub struct HeldModifiers {
     pub control: LeftRightPair,
@@ -637,8 +506,7 @@ pub struct HeldModifiers {
 }
 
 impl std::fmt::Debug for HeldModifiers {
-    /// Only the held modifiers, each with its side(s): `HeldModifiers { Meta(L,R), Alt(L) }`, or
-    /// `HeldModifiers {}` when nothing is held.
+    /// `HeldModifiers { Meta(L,R), Alt(L) }`, or `HeldModifiers {}` if none.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "HeldModifiers {{")?;
         let mut any = false;
@@ -662,7 +530,6 @@ impl std::fmt::Debug for HeldModifiers {
 }
 
 impl HeldModifiers {
-    /// Record a modifier key's up or down. A non-modifier changes nothing.
     pub fn apply(&mut self, ev: &KeyEvent) {
         let is_down = ev.press == PressType::Down;
         match ev.key {
@@ -678,20 +545,19 @@ impl HeldModifiers {
         }
     }
 
-    /// Entering a passthrough layer: a DOWN for every held key, so the app catches up.
+    /// Downs for every held key, so the app catches up on entering a passthrough layer.
     #[must_use]
     pub fn open(self) -> Vec<MercuryEffect> {
         self.emit_synchronization_events(PressType::Down)
     }
 
-    /// Leaving one: an UP for every held key, so the app forgets them.
+    /// Ups for every held key, so the app forgets them on leaving a passthrough layer.
     #[must_use]
     pub fn close(self) -> Vec<MercuryEffect> {
         self.emit_synchronization_events(PressType::Up)
     }
 
-    /// Emit `press` for every held key, each carrying the flags as they stand after its own
-    /// change, so a shared left/right bit clears only when both sides are up.
+    /// Emit `press` for every held key, each carrying flags as they stand after that key's own change, so a shared left/right bit clears only when both sides are up.
     fn emit_synchronization_events(self, press: PressType) -> Vec<MercuryEffect> {
         let mut shown = if press == PressType::Down {
             Self::default()
@@ -710,7 +576,6 @@ impl HeldModifiers {
         out
     }
 
-    /// The modifier keys currently down, pairing each key with its field once.
     fn held_keys(&self) -> impl Iterator<Item = Key> {
         [
             (Key::ControlLeft, self.control.left),
@@ -726,7 +591,6 @@ impl HeldModifiers {
         .filter_map(|(key, held)| held.then_some(key))
     }
 
-    /// The current modifier state as flags, for stamping on an emitted event.
     #[must_use]
     pub const fn flags(self) -> ModifierFlags {
         let mut f = ModifierFlags::empty();
@@ -752,7 +616,6 @@ pub const fn foreground(app: App, pid: Pid) -> MercuryEvent {
     MercuryEvent::Foreground(ForegroundEvent { app, pid })
 }
 
-/// A frame read landing, as the performer reports it.
 #[must_use]
 pub const fn frame_read(
     window: WindowId,
@@ -766,7 +629,6 @@ pub const fn frame_read(
     })
 }
 
-/// A focus read landing, as the performer reports it.
 #[must_use]
 pub const fn focus_read(
     pid: Pid,
@@ -780,13 +642,11 @@ pub const fn focus_read(
     })
 }
 
-/// A tab event, carrying the front tab's URL as the browser reported it.
 #[must_use]
 pub const fn tab(url: String) -> MercuryEvent {
     MercuryEvent::Tab(TabEvent { url })
 }
 
-/// A quit-request event (the menu bar's Quit).
 #[must_use]
 pub const fn quit_event() -> MercuryEvent {
     MercuryEvent::Quit(Quit)

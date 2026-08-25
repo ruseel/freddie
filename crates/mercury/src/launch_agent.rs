@@ -1,8 +1,4 @@
-//! `mercury install` and `mercury uninstall`: the launch agent, which is mercury's own.
-//!
-//! What a launch agent says is an answer about one app rather than about daemons in general: which
-//! session type it loads in, when launchd should revive it, and what label it sits under. So this
-//! stays here rather than moving to `freddie_cli` with the lifecycle verbs.
+//! `mercury install` and `mercury uninstall`: the login launch agent.
 
 use std::fmt;
 use std::io;
@@ -15,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::Mercury;
 
-/// mercury's own verbs, flattened into its command line beside freddie's.
+/// install and uninstall the launch agent.
 #[derive(clap::Subcommand, Debug)]
 pub(crate) enum MercuryVerb {
     /// Register this binary as a login agent, so mercury starts with the session.
@@ -27,51 +23,39 @@ pub(crate) enum MercuryVerb {
 /// The reverse-DNS prefix mercury's launch agent sits under.
 const AGENT_PREFIX: &str = "hg.freddie.";
 
-/// The launchd job's name, keyed to the same name as the lock and the log directory, so a fork
-/// that renames the app gets its own job.
+/// Launchd job name, keyed to the app name so a rename gets its own job.
 fn label() -> String {
     format!("{AGENT_PREFIX}{}", Mercury::NAME)
 }
 
-/// Put what these verbs say on the terminal and in mercury's log, the way every lifecycle verb's
-/// output goes. `freddie_cli` does this for its own verbs; these are mercury's.
 fn log_to_mercurys_file() {
     if let Ok(instance) = Mercury::instance(&freddie_cli::NoArgs) {
         freddie_cli::init_client_logging(&instance);
     }
 }
 
-/// Where `launchctl` lives. Absolute, so `PATH` cannot point this at something else.
+/// Absolute so PATH cannot redirect it.
 const LAUNCHCTL: &str = "/bin/launchctl";
 
-/// Where `id` lives, for the one number with no safe route out of std.
+/// Absolute; the workspace forbids the unsafe `getuid` binding.
 const ID: &str = "/usr/bin/id";
 
 /// A binary under this is not somewhere an agent should point for long: `cargo clean` deletes it.
 const TRANSIENT: &str = "/target/";
 
-/// The launch agent this app installs, as launchd reads it.
-///
-/// Serialized rather than written from a template: a program path holds whatever a home directory
-/// holds, and `&` in one would have to be escaped by hand on the way into XML. The serializer does
-/// that, and cannot emit a malformed plist at all.
+/// The launch agent plist. Serialized so a program path containing `&` is escaped.
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 struct Agent {
-    /// The job's name, keyed to the same name as the lock and the log directory, so a fork that
-    /// renames the app gets its own job rather than fighting this one over a shared label.
+    /// Keyed to the app name so a rename gets its own job.
     label: String,
 
-    /// The daemon verb, never the bare binary: `mercury` spawns a detached daemon and exits, which would
-    /// leave launchd watching the job vanish and unable to see the process that actually holds the
-    /// keyboard. This is why that verb stays invocable while hidden from `--help`.
+    /// The daemon verb, not the bare binary: `mercury` spawns a detached daemon and exits, which would leave launchd watching the job vanish.
     program_arguments: Vec<String>,
 
-    /// Start it with the session.
     run_at_load: bool,
 
-    /// `Aqua`: the session `CGEventTap` needs a window server, `NSWorkspace`, and per-user TCC,
-    /// none of which a root daemon at the login window has.
+    /// `Aqua`: `CGEventTap` needs a window server, `NSWorkspace`, and per-user TCC, which a root daemon at the login window does not have.
     limit_load_to_session_type: String,
 
     keep_alive: KeepAlive,
@@ -80,20 +64,14 @@ struct Agent {
     throttle_interval: u32,
 }
 
-/// When launchd should bring the job back.
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
 struct KeepAlive {
-    /// `false`: revive a mercury that died unexpectedly, leave one down that declined to run.
-    ///
-    /// Both halves are the exit code. Every deliberate way out exits zero: `q` from home, the
-    /// menu bar's Quit, `mercury stop`, `launchctl bootout`, all of which reach the model's quit,
-    /// and so does every refusal to start, since none of those is fixed by trying again.
+    /// `false`: revive a crash, leave a clean exit down. Every deliberate quit and every refused start exits 0.
     successful_exit: bool,
 }
 
 impl Agent {
-    /// The agent that runs `program`.
     fn running(program: &Path) -> Self {
         Self {
             label: label(),
@@ -111,7 +89,7 @@ impl Agent {
     }
 }
 
-/// Where the agent's plist goes. launchd reads this directory per user.
+/// `~/Library/LaunchAgents/<label>.plist`.
 fn plist_path() -> Option<PathBuf> {
     Some(
         PathBuf::from(std::env::var_os("HOME")?)
@@ -120,21 +98,14 @@ fn plist_path() -> Option<PathBuf> {
     )
 }
 
-/// Why an install or uninstall did not happen.
 enum NotInstalled {
-    /// The environment names no home directory to put the agent in.
     NoHome,
-    /// This binary's own path could not be read.
     NoExe(io::Error),
-    /// The plist could not be written or removed.
     Unwritable(io::Error),
-    /// The plist could not be serialized.
     Unserializable(plist::Error),
-    /// A subprocess could not be run, or refused.
     Refused(io::Error),
 }
 
-/// The terminal wording for each, without the `mercury: ` a caller puts in front.
 impl fmt::Display for NotInstalled {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -149,10 +120,9 @@ impl fmt::Display for NotInstalled {
     }
 }
 
-/// `mercury install`: register this binary as a login agent.
+/// Register this binary as a login agent.
 ///
-/// Idempotent. A previously loaded job is booted out before the new one is bootstrapped, so
-/// re-running this after `cargo install` is how the agent comes to point at a rebuilt binary.
+/// Idempotent. Boots out a previously loaded job before bootstrapping, so re-running after `cargo install` points the agent at the rebuilt binary.
 pub(crate) fn install() -> ExitCode {
     log_to_mercurys_file();
     match install_agent() {
@@ -173,7 +143,6 @@ pub(crate) fn install() -> ExitCode {
     }
 }
 
-/// Write the plist and hand it to launchd, returning the binary it now names.
 fn install_agent() -> Result<PathBuf, NotInstalled> {
     let program = std::env::current_exe().map_err(NotInstalled::NoExe)?;
     let path = plist_path().ok_or(NotInstalled::NoHome)?;
@@ -184,8 +153,7 @@ fn install_agent() -> Result<PathBuf, NotInstalled> {
     plist::to_file_xml(&path, &Agent::running(&program)).map_err(NotInstalled::Unserializable)?;
     debug!(plist = %path.display(), program = %program.display(), "wrote the agent");
 
-    // A failure here is the normal first install: there is nothing loaded to boot out. Traced
-    // rather than ignored outright, so the log still says what launchd made of it.
+    // First install has nothing loaded to boot out. Traced so the log still says what launchd made of it.
     if let Err(e) = bootout() {
         debug!(%e, "nothing was loaded to boot out");
     }
@@ -193,10 +161,9 @@ fn install_agent() -> Result<PathBuf, NotInstalled> {
     Ok(program)
 }
 
-/// `mercury uninstall`: take the login agent back out.
+/// Take the login agent back out.
 ///
-/// Exits 0 when nothing was installed, so a teardown script that does not know the state is not
-/// wrong to call it.
+/// Exits 0 when nothing was installed, so a teardown script can call it without knowing the state.
 pub(crate) fn uninstall() -> ExitCode {
     log_to_mercurys_file();
     match uninstall_agent() {
@@ -213,8 +180,7 @@ pub(crate) fn uninstall() -> ExitCode {
 
 fn uninstall_agent() -> Result<(), NotInstalled> {
     let path = plist_path().ok_or(NotInstalled::NoHome)?;
-    // launchd forgets the job before its description goes, or it is left holding one whose plist
-    // no longer exists. A failure is nothing having been loaded, as in `install_agent`.
+    // Boot out before removing the plist, or launchd is left holding a job whose plist is gone. Failure is nothing loaded.
     if let Err(e) = bootout() {
         debug!(%e, "nothing was loaded to boot out");
     }
@@ -223,28 +189,22 @@ fn uninstall_agent() -> Result<(), NotInstalled> {
             debug!(plist = %path.display(), "removed the agent");
             Ok(())
         }
-        // Nothing installed is not a failure to uninstall.
+        // Nothing installed is not a failure.
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(NotInstalled::Unwritable(e)),
     }
 }
 
-/// The user's GUI domain, which is where a `LaunchAgent` lives.
+/// launchd GUI domain for this user.
 fn domain() -> Result<String, NotInstalled> {
     Ok(format!("gui/{}", users_uid()?))
 }
 
-/// Tell launchd to forget the job, whether or not it has one.
 fn bootout() -> Result<(), NotInstalled> {
     launchctl(&["bootout", &format!("{}/{}", domain()?, label())])
 }
 
-/// Run `launchctl` with `args`, reporting a refusal as a failure.
-///
-/// `output` rather than `status`, so launchctl's own stderr is captured instead of inherited. It
-/// complains on a `bootout` with nothing loaded, which is the normal first install, and printing
-/// that beside "mercury installed" reads like a failure. Its words are kept for the error that
-/// does fail, where they say more than an exit code.
+/// Run `launchctl`. Captures stderr so a `bootout` with nothing loaded does not print beside "mercury installed".
 fn launchctl(args: &[&str]) -> Result<(), NotInstalled> {
     let out = Command::new(LAUNCHCTL)
         .args(args)
@@ -263,10 +223,9 @@ fn launchctl(args: &[&str]) -> Result<(), NotInstalled> {
     }
 }
 
-/// This user's numeric id, which names the launchd domain their agents live in.
+/// This user's uid, which names the launchd domain.
 ///
-/// A subprocess rather than `getuid(2)`, because the workspace forbids `unsafe` and every binding
-/// for it is an unsafe extern call. The same trade [`signal_pid`] makes with `/bin/kill`.
+/// Spawned via `/usr/bin/id` because the workspace forbids `unsafe` and `getuid` is an unsafe extern.
 fn users_uid() -> Result<u32, NotInstalled> {
     let out = Command::new(ID)
         .arg("-u")
@@ -289,7 +248,6 @@ mod tests {
         String::from_utf8(xml).expect("plists are utf8")
     }
 
-    // A fork renames `APP` and gets its own launchd job rather than fighting this one over a label.
     #[test]
     fn the_label_is_keyed_to_the_app() {
         assert_eq!(label(), "hg.freddie.mercury");
@@ -303,8 +261,6 @@ mod tests {
         assert!(xml.contains("<key>Label</key>"));
     }
 
-    // The reason this is serialized rather than substituted into a template: a home directory can
-    // hold an `&`, and writing one into XML unescaped makes a plist launchd will not read.
     #[test]
     fn a_program_path_is_escaped() {
         let xml = agent_xml("/Users/a&b/.cargo/bin/mercury");
@@ -312,7 +268,6 @@ mod tests {
         assert!(!xml.contains("/Users/a&b/"));
     }
 
-    // launchd revives a mercury that died and leaves one down that declined to run.
     #[test]
     fn the_agent_only_revives_an_unclean_exit() {
         let xml = agent_xml("/usr/bin/true");

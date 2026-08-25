@@ -1,4 +1,4 @@
-//! `#[child]` on a positional field descends the same as a named one.
+//! `#[child]` on a positional field.
 
 mod common;
 
@@ -28,8 +28,6 @@ struct TupleLeaf;
 type TupleRootPath<'a> = &'a mut TupleRoot;
 type TupleMidPath<'a> = PathMut<TupleMid, TupleRootPath<'a>>;
 
-// The leaf binding is reached through `root.0 -> mid.0 (Box) -> leaf`, and the root fallback fires
-// when the subtree misses. `ignore` returns the fired key's length.
 #[test]
 fn positional_child_descends() {
     let mut root = TupleRoot(TupleMid(Box::new(TupleLeaf)));
@@ -47,8 +45,6 @@ fn positional_child_descends() {
     );
 }
 
-// The check projects through the same `Edge`, so it collects the root's and leaf's triggers across
-// the positional descent.
 #[test]
 fn positional_child_accumulates() {
     let mut root = TupleRoot(TupleMid(Box::new(TupleLeaf)));

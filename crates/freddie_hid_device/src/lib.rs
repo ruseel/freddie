@@ -1,7 +1,4 @@
-//! `CGEvent` source-device identity and `IOKit` resolve.
-//!
-//! Private SPI: `CGEventCopyIOHIDEvent` / `IOHIDEventGetSenderID`. Public `IOKit` for
-//! registry property walks. macOS only.
+//! `CGEvent` source-device identity and `IOKit` resolve. macOS only.
 
 #![cfg(target_os = "macos")]
 
@@ -21,8 +18,7 @@ use io_kit_sys::{
 };
 use mach2::kern_return::KERN_SUCCESS;
 
-/// Registry entry id of the originating HID service. Stable while the device stays attached;
-/// a replug yields a new one.
+/// Registry entry id of the originating HID service. A replug yields a new one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SourceId(pub u64);
 
@@ -35,7 +31,7 @@ unsafe extern "C" {
     fn IOHIDEventGetSenderID(event: IOHIDEventRef) -> u64;
 }
 
-/// Source HID service of a `CGEvent`, or `None` for an injected/synthetic event.
+/// Source HID service of a `CGEvent`, or `None` for an injected event.
 #[must_use]
 pub fn source_of(event: &CGEvent) -> Option<SourceId> {
     // SAFETY: private CoreGraphics symbol; returns +1 IOHIDEvent or null when no HID origin.
@@ -54,7 +50,7 @@ pub fn source_of(event: &CGEvent) -> Option<SourceId> {
     (sender != 0).then_some(SourceId(sender))
 }
 
-/// Resolved identity of a source for the categorize path (once per `SourceId`).
+/// Resolved identity of a source, for the categorize path (once per [`SourceId`]).
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
     pub vendor_id: u16,
@@ -147,7 +143,7 @@ fn with_prop<T>(
 ) -> Option<T> {
     let cf_key = CFString::new(key);
     let mut current: io_registry_entry_t = entry;
-    // First entry is borrowed from the caller; each parent we create is +1 and must be released.
+    // First entry is borrowed; each parent created is +1 and must be released.
     let mut owned: Option<io_object_t> = None;
     loop {
         // SAFETY: CreateCFProperty returns +1 or null; key is a live CFString.

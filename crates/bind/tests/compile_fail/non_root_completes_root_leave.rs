@@ -1,5 +1,4 @@
-// Only the root focus completes a root leave: a deeper path has no
-// `CompletesTo<AppPath>` impl.
+// Only the root focus completes a root leave: a deeper path has no `CompletesTo<AppPath>` impl.
 use laserbeam::{CompletesTo, Completed, PathMut};
 
 struct App {

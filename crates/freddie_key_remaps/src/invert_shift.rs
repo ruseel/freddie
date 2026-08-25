@@ -1,11 +1,6 @@
 use freddie_keys::{KeyEvent, ModifierFlags};
 
 /// Toggle the SHIFT bit on a key event; other modifiers are left alone.
-///
-/// Bare becomes SHIFT, SHIFT becomes bare; `CONTROL` alone becomes `CONTROL|SHIFT`, and so on.
-/// Physical key and press type are unchanged.
-///
-/// Used for number-row invert (`1` ↔ `!`), backslash ↔ pipe, and similar.
 #[must_use]
 pub const fn invert_shift(ev: &KeyEvent) -> KeyEvent {
     let mut flags = ev.flags;

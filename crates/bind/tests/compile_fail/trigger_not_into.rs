@@ -1,6 +1,4 @@
-// A trigger expression must lift into the marker's `Trigger` via `Into` (the
-// accumulate half). `Weird` has `EventTrigger` and a valid handler, so dispatch
-// is satisfied and the only failure is the missing `Into`.
+// A trigger must implement `Into` the marker's `Trigger`. `Weird` has `EventTrigger` and a valid handler, so the only failure is the missing `Into`.
 use bind::{AscendState, Bind, Bindings, EventTrigger};
 use laserbeam::Completed;
 
@@ -23,7 +21,6 @@ impl Bindings for M {
     type Output = Vec<usize>;
 }
 
-// `Weird` matches events but has no `From`/`Into` for `Trig`.
 struct Weird;
 impl EventTrigger for Weird {
     type Event = KeyEv;

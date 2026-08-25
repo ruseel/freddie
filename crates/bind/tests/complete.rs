@@ -1,6 +1,4 @@
-//! `CompletesTo` / peel on the shared App tree: the five leaves from
-//! `path-peel-complete`, built with the same `PathMut::from_fn` projections
-//! the derive emits.
+//! `CompletesTo` / peel on the shared App tree.
 
 mod common;
 
@@ -9,11 +7,7 @@ use common::{
 };
 use laserbeam::{Completed, CompletesTo, PathMut, Stop};
 
-/// A route-parented path completes like any other, and its `Up` payload is the enum the
-/// consumer wrote: which route the leave took, carrying that parent's own leave.
-///
-/// Types only. Building a `TitlePath` needs the two projections the derive emits, and what
-/// this pins is the shape they would produce.
+/// Pins the `Stop` shape of a route-parented leave: `Up` is the consumer's enum.
 #[expect(dead_code)]
 fn title_shapes<'a>(c: Completed<TitlePath<'a>>) {
     let stop: Stop<TitlePath<'a>, TitleParentUp<'a>> = c.into_inner();

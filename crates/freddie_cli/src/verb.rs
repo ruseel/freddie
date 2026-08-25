@@ -1,16 +1,11 @@
-//! The lifecycle verbs, and what each of them can be told.
+//! The lifecycle verbs, and the flags each one takes.
 
 use crate::App;
 use crate::logging::Terminal;
 
-/// The lifecycle verbs, for an app to flatten into its own command line.
+/// Lifecycle verbs for an app to flatten into its own command line.
 ///
-/// Each variant's doc comment is its line in `--help`, so the help text cannot drift from the
-/// verbs. Declaration order is help order within this block; where the block sits among the app's
-/// own verbs is the app's to choose.
-///
-/// The derive would put a `Debug` bound on `TApp`, which holds no data here. The types below hold
-/// the flags and derive it against those.
+/// Each variant's doc comment is its line in `--help`.
 #[derive(clap::Subcommand)]
 pub enum Verb<TApp: App> {
     /// Start the daemon if it is not running, and exit.
@@ -29,7 +24,6 @@ pub enum Verb<TApp: App> {
 }
 
 impl<TApp: App> Verb<TApp> {
-    /// What this verb's terminal is for: being the daemon, or talking to one.
     pub(crate) const fn terminal(&self) -> Terminal {
         match self {
             Self::Daemon(_) => Terminal::Daemon,
@@ -39,8 +33,6 @@ impl<TApp: App> Verb<TApp> {
         }
     }
 
-    /// What this verb said about which daemon it meant. Every verb says something, because every
-    /// verb is about one.
     pub(crate) const fn id(&self) -> &TApp::Id {
         match self {
             Self::Start(args) => &args.id,
@@ -53,7 +45,7 @@ impl<TApp: App> Verb<TApp> {
     }
 }
 
-/// What the foreground daemon can be told: which daemon to be, and what the app asks for itself.
+/// Which daemon to be, and the app's own daemon flags.
 #[derive(clap::Args, Debug)]
 pub struct DaemonVerbArgs<I: clap::Args, F: clap::Args> {
     #[command(flatten)]
@@ -63,7 +55,7 @@ pub struct DaemonVerbArgs<I: clap::Args, F: clap::Args> {
     pub app: F,
 }
 
-/// What `start` can be told, which is whatever the daemon it spawns can be told.
+/// Flags `start` forwards to the daemon it spawns.
 #[derive(clap::Args, Debug)]
 pub struct StartArgs<I: clap::Args, F: clap::Args> {
     #[command(flatten)]
@@ -73,13 +65,12 @@ pub struct StartArgs<I: clap::Args, F: clap::Args> {
     pub app: F,
 }
 
-/// What `restart` can be told: `start`'s flags, and how hard to stop what is running.
+/// `start`'s flags, plus how hard to stop what is running.
 #[derive(clap::Args, Debug)]
 pub struct RestartArgs<I: clap::Args, F: clap::Args> {
     /// Destroy the running daemon with SIGKILL instead of asking it to quit.
     ///
-    /// For a daemon that no longer answers. It runs no destructors, so whatever the app undoes on
-    /// the way out is left undone.
+    /// For a daemon that no longer answers. Destructors do not run.
     #[arg(long)]
     pub force: bool,
 
@@ -90,28 +81,23 @@ pub struct RestartArgs<I: clap::Args, F: clap::Args> {
     pub app: F,
 }
 
-/// What a verb that only finds a daemon can be told, which is which daemon.
+/// Flags that name a daemon, for verbs that only find one.
 #[derive(clap::Args, Debug)]
 pub struct IdArgs<I: clap::Args> {
     #[command(flatten)]
     pub id: I,
 }
 
-/// What `logs` can be told.
+/// Flags for `logs`.
 #[derive(clap::Args, Debug)]
 pub struct LogsArgs<I: clap::Args> {
-    /// The least severe records to show: `error`, `warn`, `info`, `debug`, or `trace`.
+    /// Least severe records to show: `error`, `warn`, `info`, `debug`, or `trace`.
     ///
-    /// The file always records `debug`, whatever this says, so this widens or narrows what
-    /// reaches the terminal and never what is kept.
+    /// The file always records `debug`. This only filters the terminal.
     #[arg(long, default_value = crate::logging::DEFAULT_LOG_LEVEL)]
     pub level: tracing::Level,
 
-    /// Include the model state on each dispatch record.
-    ///
-    /// It is the whole model under `Debug` and it is most of the line, so it is left out of a
-    /// follow that is watching what happened rather than reading what the model became. Off unless
-    /// asked for.
+    /// Include the model state on each dispatch record. Off unless asked for: it is most of the line.
     #[arg(long)]
     pub include_state: bool,
 
@@ -123,13 +109,12 @@ pub struct LogsArgs<I: clap::Args> {
     pub id: I,
 }
 
-/// What `stop` can be told.
+/// Flags for `stop`.
 #[derive(clap::Args, Debug)]
 pub struct StopArgs<I: clap::Args> {
     /// Destroy the daemon with SIGKILL instead of asking it to quit.
     ///
-    /// For a daemon that no longer answers. It runs no destructors, so whatever the app undoes on
-    /// the way out is left undone.
+    /// For a daemon that no longer answers. Destructors do not run.
     #[arg(long)]
     pub force: bool,
 

@@ -1,7 +1,4 @@
-//! The client verbs: everything a binary does that is not being the daemon.
-//!
-//! None of these takes the single-instance lock. They probe it to find the daemon, and the daemon
-//! is the only process that holds it.
+//! The client verbs. They probe the single-instance lock; they do not take it.
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -22,48 +19,30 @@ use tracing::{Level, debug, info, warn};
 use crate::stdio_inherit::IsolateParentStdio;
 use crate::{App, DAEMON_VERB, Instance, TypedArgs};
 
-/// How often [`find_daemon`] re-probes a lock whose holder has not named itself yet.
 const POLL: Duration = Duration::from_millis(10);
-
-/// How long `stop` waits for the daemon to release the lock before reporting that it has not.
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How long `start` waits for a spawned daemon to take the lock.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// How long to wait out [`Held::Unnamed`], the window between a daemon locking the file and
-/// writing its pid into it.
-///
-/// Ten polls. The window is a `set_len` and a `write_all` on an already-open file, so it closes in
-/// microseconds, and a holder still anonymous after this is one no longer wait will help: either
-/// its pid write failed, which fails its acquire and releases the lock, or it has been stopped
-/// mid-acquire and will not finish at all. Failing fast reports that; waiting only delays it.
+/// How long to wait out [`Held::Unnamed`]. The window is a `set_len` and a `write_all` on
+/// an already-open file; a holder still anonymous after this is not going to name itself.
 const PID_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// What a client found when it went looking for the daemon.
 enum Target {
-    /// Nothing holds the lock.
     NotRunning,
-    /// The daemon, ready to be signalled.
     Running(Pid),
-    /// Something holds the lock and never recorded a pid, so there is nothing to signal.
     Anonymous,
 }
 
-/// The signal `stop` sends, and what each one costs.
 #[derive(Clone, Copy, Debug)]
 enum Signal {
-    /// SIGTERM. The daemon routes it into the event channel and leaves the way the menu bar's Quit
-    /// does, opening the modifiers it swallowed on the way out.
+    /// SIGTERM. The daemon opens swallowed modifiers on the way out.
     Terminate,
-    /// SIGKILL. The kernel destroys the process, so no destructor runs, the keyboard grab is torn
-    /// down rather than released, and a swallowed modifier stays down in the app underneath. The
-    /// only out for a daemon whose worker is blocked in an effect, which SIGTERM cannot reach.
+    /// SIGKILL. No destructor runs; a swallowed modifier stays down. For a worker blocked
+    /// in an effect, which SIGTERM cannot reach.
     Kill,
 }
 
 impl Signal {
-    /// The name `/bin/kill` uses for it.
     #[cfg(unix)]
     const fn flag(self) -> &'static str {
         match self {
@@ -73,38 +52,23 @@ impl Signal {
     }
 }
 
-/// Why a stop did not happen.
-///
-/// Separate variants because the remedies differ: `--force` answers [`Failure::Ignored`] and
-/// nothing else. There is no pid to destroy in the other three.
 enum Failure {
-    /// The lock could not be read, so nothing is known about what holds it.
     Unreadable(LockError),
-    /// Something holds the lock and recorded no pid, so there is nothing to signal. Carries the
-    /// lock path, so the message can name the two files to remove if the holder is stale.
     Anonymous(PathBuf),
-    /// The signal could not be sent to the pid the lock named.
     Unsignalable(SignalFailure),
-    /// The daemon was signalled and still holds the lock.
     Ignored(SignalIgnored),
 }
 
-/// A daemon that outlasted the signal sent to it, and which signal that was.
-///
-/// The remedy differs: a daemon that outlasted SIGTERM can still be destroyed, and one that
-/// outlasted SIGKILL cannot be destroyed by anything.
 struct SignalIgnored {
     pid: Pid,
     signal: Signal,
 }
 
-/// A signal that could not be sent, and to whom.
 struct SignalFailure {
     pid: Pid,
     error: io::Error,
 }
 
-/// The terminal wording for each, without the name a caller puts in front.
 impl fmt::Display for Failure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -119,14 +83,11 @@ impl fmt::Display for Failure {
             Self::Unsignalable(SignalFailure { pid, error }) => {
                 write!(f, "could not signal pid {pid}: {error}")
             }
-            // No verb named: `stop` and `restart` both reach this, and `--force` is on whichever
-            // one was typed.
             Self::Ignored(SignalIgnored { pid, signal }) => match signal {
                 Signal::Terminate => {
                     write!(f, "pid {pid} still holds the lock; --force destroys it")
                 }
-                // SIGKILL cannot be caught, but its delivery waits for an uninterruptible system
-                // call to return. Nothing else to suggest: the process dies when that returns.
+                // SIGKILL delivery waits for an uninterruptible system call to return.
                 Signal::Kill => write!(
                     f,
                     "pid {pid} outlasted SIGKILL, so it is stuck in a system call and will go when that returns"
@@ -137,15 +98,7 @@ impl fmt::Display for Failure {
 }
 
 /// Ask the running daemon to go, and wait for it to let go of the lock.
-///
-/// `Ok(None)` is the daemon that was not there: nothing to stop is not a failure, so a teardown
-/// script that does not know the state is not wrong to call this.
-///
-/// `stop` and `restart` both need the outcome and word it differently, so this reports facts and
-/// says nothing to the terminal. Its records are `debug!`, which is the rule for a client verb:
-/// `info!` is the answer and reaches stdout, `warn!` and above are the problem and reach stderr,
-/// and `debug!` is what it did along the way, which only the file keeps. Narrating here at `info!`
-/// would print three lines where the verb has one thing to say.
+/// `Ok(None)` is nothing to stop, not a failure. Reports facts; the verb words the outcome.
 fn stop_daemon<TApp: App>(instance: &Instance, signal: Signal) -> Result<Option<Pid>, Failure> {
     let pid = match find_daemon(instance) {
         Ok(Target::Running(pid)) => pid,
@@ -196,14 +149,8 @@ fn stop_daemon<TApp: App>(instance: &Instance, signal: Signal) -> Result<Option<
     }
 }
 
-/// `stop`.
-///
-/// Exits 0 when there was nothing to stop, so calling this twice, or in a teardown script that
-/// does not know the state, is not an error.
+/// `stop`. Exits 0 when there was nothing to stop.
 pub(crate) fn stop<TApp: App>(instance: &Instance, force: bool) -> ExitCode {
-    // Before looking for anything, so a stop that found nothing running still leaves a record that
-    // somebody asked. `debug!` rather than `info!`: it is an action, not the verb's answer, and the
-    // answer should be the only thing the terminal shows.
     debug!(force, "stop requested");
     let signal = if force {
         Signal::Kill
@@ -226,27 +173,18 @@ pub(crate) fn stop<TApp: App>(instance: &Instance, force: bool) -> ExitCode {
     }
 }
 
-/// A daemon that is up, and whether this call is why.
 enum Running {
-    /// Already running when this looked, and it had named itself.
     Adopted(Pid),
-    /// Already running when this looked, mid-acquire and not yet named.
     AdoptedUnnamed,
-    /// Spawned by this call.
     Started(Pid),
 }
 
-/// Why no daemon is running.
 enum NotStarted {
-    /// The lock could not be read, so nothing is known about what holds it.
     Unreadable(LockError),
-    /// The daemon could not be spawned.
     Unspawnable(io::Error),
-    /// It was spawned and never took the lock. Its own account is in the log.
     Silent(Pid),
 }
 
-/// The terminal wording for each, without the name a caller puts in front.
 impl fmt::Display for NotStarted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -260,14 +198,8 @@ impl fmt::Display for NotStarted {
     }
 }
 
-/// Make sure a daemon is running, starting one if none is.
-///
-/// The check before spawning is for the answer, not for mutual exclusion. Two `start`s at the same
-/// instant can both see [`Held::Free`] and both spawn, and the lock refuses one of the two daemons
-/// exactly as it refuses a second `daemon`; nothing here has to be atomic.
-///
-/// Reports facts and says nothing to the terminal, as [`stop_daemon`] does, because `start` and
-/// `restart` word the outcome differently.
+/// Make sure a daemon is running. Two `start`s can both see [`Held::Free`] and both spawn;
+/// the lock refuses one of them. Reports facts; the verb words the outcome.
 fn ensure_started<TApp: App>(
     instance: &Instance,
     typed: TypedArgs<'_>,
@@ -294,11 +226,8 @@ fn ensure_started<TApp: App>(
     }
 }
 
-/// Spawn this same binary as its own hidden `daemon` verb, detached from this terminal.
-///
-/// All three stdio streams go to /dev/null. The daemon's terminal tracing layer then has nowhere
-/// to write, which is why `--log-level` is not passed through: it governs a terminal this child
-/// does not have. The log file records `debug` regardless, and `logs` reads that.
+/// Spawn this binary as its hidden `daemon` verb, detached. Stdio goes to /dev/null, so
+/// `--log-level` is not passed through.
 fn spawn_daemon<TApp: App>(typed: TypedArgs<'_>) -> io::Result<Pid> {
     let exe = std::env::current_exe()?;
     let mut command = Command::new(exe);
@@ -314,7 +243,6 @@ fn spawn_daemon<TApp: App>(typed: TypedArgs<'_>) -> io::Result<Pid> {
     Ok(Pid(child.id()))
 }
 
-/// Put the child where a terminal cannot reach it, so it outlives the one that spawned it.
 #[cfg(unix)]
 fn detach(command: &mut Command) -> &mut Command {
     use std::os::unix::process::CommandExt;
@@ -325,23 +253,15 @@ fn detach(command: &mut Command) -> &mut Command {
 #[cfg(windows)]
 fn detach(command: &mut Command) -> &mut Command {
     use std::os::windows::process::CommandExt;
-    /// No console at all, which is what the three null stdio streams already say.
+
     const DETACHED_PROCESS: u32 = 0x0000_0008;
-    /// No console control event reaches it.
+
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
 }
 
-/// Poll until something holds the lock, up to [`START_TIMEOUT`]. `true` when one does.
-///
-/// Polled rather than waited on, unlike [`watch_for_free`]: flock reports a release, so waiting
-/// for a daemon to go is edge-triggered, and there is no way to wait on another process taking a
-/// lock. This is the one direction that has no edge.
-///
-/// Taking the lock is the readiness signal, and the daemon takes it first thing, before it
-/// measures the screens, shows an icon, or grabs the keyboard. So this returning `true` says the
-/// process is alive and is the one daemon, not that it finished starting: one that is refused
-/// Accessibility fails a moment later and says so in the log.
+/// Poll until something holds the lock, up to [`START_TIMEOUT`]. Flock reports a release,
+/// not an acquire, so this is the one direction that has no edge.
 fn wait_until_held(instance: &Instance) -> bool {
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
@@ -358,9 +278,6 @@ fn wait_until_held(instance: &Instance) -> bool {
     }
 }
 
-/// Say what [`ensure_started`] found, and report the exit code for it.
-///
-/// Shared by `start` and `restart`, so a started daemon reads the same whichever verb produced it.
 fn report(instance: &Instance, running: Result<Running, NotStarted>) -> ExitCode {
     match running {
         Ok(Running::Started(pid)) => {
@@ -385,22 +302,13 @@ fn report(instance: &Instance, running: Result<Running, NotStarted>) -> ExitCode
     }
 }
 
-/// `start`, and the bare binary: make sure a daemon is up, and do not stay to watch.
+/// `start`, and the bare binary.
 pub(crate) fn start<TApp: App>(instance: &Instance, typed: TypedArgs<'_>) -> ExitCode {
     report(instance, ensure_started::<TApp>(instance, typed))
 }
 
-/// `restart`: replace the running daemon with a fresh one.
-///
-/// The two halves are already sequenced by the lock. [`stop_daemon`] returns only once the lock is
-/// free, which is the same condition [`ensure_started`] needs to find, so the new daemon never
-/// races the old one's shutdown and reports "already running" against the process it just replaced.
-///
-/// A daemon that would not stop means no start is attempted: the old process still owns the tap,
-/// and spawning a second one that the lock immediately refuses would say nothing useful.
-///
-/// Starting from cold is a restart with an empty first half rather than an error, so a script that
-/// restarts after a rebuild does not have to know whether anything was up.
+/// `restart`. [`stop_daemon`] returns only once the lock is free, so the new daemon never
+/// races the old one. Starting from cold is a restart with an empty first half.
 pub(crate) fn restart<TApp: App>(
     instance: &Instance,
     force: bool,
@@ -422,12 +330,7 @@ pub(crate) fn restart<TApp: App>(
     report(instance, ensure_started::<TApp>(instance, typed))
 }
 
-/// Report whether the daemon is running, and which process it is.
-///
-/// Exits nonzero when nothing is running, so `status && ...` reads the way a shell expects. That
-/// is the opposite of `stop`, which exits 0 having found nothing to stop, and both are deliberate:
-/// this verb answers a question, so its exit code is the answer, while `stop` states a goal that a
-/// stopped daemon already satisfies.
+/// Report whether the daemon is running. Exits nonzero when nothing is running.
 pub(crate) fn status(instance: &Instance) -> ExitCode {
     match freddie_single_instance::holder_at(instance.lock_file()) {
         Ok(Held::Free) => {
@@ -438,12 +341,8 @@ pub(crate) fn status(instance: &Instance) -> ExitCode {
             info!("{} is running (pid {pid})", instance.display_name());
             ExitCode::SUCCESS
         }
-        // The window between a daemon taking the lock and writing its pid into it. Something is
-        // running, and that is the question this verb was asked, so it answers yes without the pid
-        // rather than waiting for one.
-        //
-        // `stop` treats the same state as a failure, because a signal needs a pid and there is
-        // none. Neither is wrong: they are asking the lock different questions.
+        // Something holds the lock; answer yes without waiting for a pid. `stop` treats
+        // this as a failure because a signal needs a pid.
         Ok(Held::Unnamed) => {
             info!(
                 "{} is running (it has just started and has not recorded its pid)",
@@ -458,22 +357,14 @@ pub(crate) fn status(instance: &Instance) -> ExitCode {
     }
 }
 
-/// How many of the file's existing lines to show before following.
 const BACKLOG_LINES: usize = 50;
 
-/// How long to wait before looking for more, once a read has come up empty.
-///
-/// A poll, and the exception the "never poll" rule allows: no platform reports a regular file
-/// growing through a readiness primitive. `epoll` and `kqueue` both call a regular file always
-/// ready and return zero bytes, and `tail -F` polls for the same reason.
+/// How long to wait before looking for more once a read has come up empty.
+/// A poll: no platform reports a regular file growing through a readiness primitive.
 const IDLE: Duration = Duration::from_millis(200);
 
-/// One record out of the log file.
-///
-/// `fields` is a map rather than a struct, because its keys are whatever the call site passed:
-/// `message` is always there and the rest are the record's own. It is `#[serde(flatten)]` because
-/// the layer writes those keys at the top level, so this collects everything that is not the
-/// envelope, in the order the record holds them.
+/// One record out of the log file. `fields` is flattened because the layer writes those
+/// keys at the top level.
 #[derive(serde::Deserialize)]
 struct Record {
     pid: u32,
@@ -484,30 +375,21 @@ struct Record {
     fields: serde_json::Map<String, serde_json::Value>,
 }
 
-/// The fields `logs` leaves out unless asked for them.
-///
-/// The state is the whole model rendered with `Debug`, which is most of a dispatch record and is
-/// read when something is being debugged and not before.
 const VERBOSE_FIELDS: &[&str] = &["state"];
 
-/// What `logs` renders, and how much of each record.
 #[derive(Clone, Copy)]
 pub(crate) struct LogsView {
-    /// The least severe records to show.
     pub(crate) least: Level,
-    /// Put the state field back on dispatch records.
+
     pub(crate) include_state: bool,
-    /// Emit each record as the raw JSON it is stored as, for `jq`.
+
     pub(crate) json: bool,
 }
 
-/// Dim, for the part of a record that is the same on every line.
 const DIM: &str = "\x1b[2m";
 
-/// Back to the terminal's own colours.
 const RESET: &str = "\x1b[0m";
 
-/// The colour `fmt` would have given a level, had the file been written in colour.
 fn level_color(level: Level) -> &'static str {
     match level.as_str() {
         "ERROR" => "\x1b[31m",
@@ -519,10 +401,8 @@ fn level_color(level: Level) -> &'static str {
     }
 }
 
-/// The month-day and wall-clock time out of an RFC 3339 stamp: `2026-07-24T04:31:38.337010Z`
-/// reads as `07-24 04:31:38.337`. The year rarely changes across a log and the microseconds are
-/// noise on screen; `--json` keeps the whole stamp for anything that needs it. A stamp that is not
-/// the shape the daemon writes is shown as it is rather than mangled.
+/// `2026-07-24T04:31:38.337010Z` reads as `07-24 04:31:38.337`. A stamp that is not that
+/// shape is shown as it is.
 fn format_timestamp(ts: &str) -> Cow<'_, str> {
     let Some((date, time)) = ts.split_once('T') else {
         return Cow::Borrowed(ts);
@@ -537,9 +417,8 @@ fn format_timestamp(ts: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{month_day} {hms}"))
 }
 
-/// A dispatch's `duration_us`, in the units it reads best in: microseconds under a
-/// millisecond, milliseconds under a second, seconds beyond that. Two decimals in the
-/// larger units, in integer arithmetic so no float rounds the count the daemon measured.
+/// `duration_us` in the units it reads best in. Integer arithmetic so no float rounds
+/// the count the daemon measured.
 fn format_duration(us: u64) -> String {
     if us < 1_000 {
         format!("{us}µs")
@@ -550,9 +429,8 @@ fn format_duration(us: u64) -> String {
     }
 }
 
-/// How a dispatch's duration reads at a glance: grey while it is nothing, white as it
-/// grows, yellow when it is worth noticing, red when it is a problem. A pure handler
-/// runs in microseconds, so anything into the milliseconds is already unusual.
+/// Grey while nothing, yellow at milliseconds, red beyond. A pure handler runs in
+/// microseconds.
 const fn duration_color(us: u64) -> &'static str {
     match us {
         0..=199 => "\x1b[90m",       // grey
@@ -562,13 +440,7 @@ const fn duration_color(us: u64) -> &'static str {
     }
 }
 
-/// Show one record, colouring it the way the daemon's own terminal would have.
-///
-/// The file is written with ANSI off, because `CLAUDE.md` sends a person or an agent to read it
-/// with `grep` and `jq`, and escapes in the file would defeat both. Colour is added here instead.
-///
-/// The state is left out unless `view` asks for it: it is the whole model under `Debug`, most of
-/// the line, and read while something is being debugged and not before.
+/// Show one record. The file is written with ANSI off so `grep` and `jq` can read it.
 fn show(out: &mut impl Write, record: &Record, view: &LogsView, color: bool) -> io::Result<()> {
     let (dim, reset, level_color) = if color {
         (
@@ -610,7 +482,6 @@ fn show(out: &mut impl Write, record: &Record, view: &LogsView, color: bool) -> 
     writeln!(out)
 }
 
-/// A field as it reads: a string without its quotes, anything else as the JSON it is.
 fn as_text(value: &serde_json::Value) -> Cow<'_, str> {
     match value {
         serde_json::Value::String(s) => Cow::Borrowed(s),
@@ -618,18 +489,9 @@ fn as_text(value: &serde_json::Value) -> Cow<'_, str> {
     }
 }
 
-/// Follow the log file: show the tail of what is there, then whatever arrives.
-///
-/// `tail -F` rather than a follower of our own. It waits for a file that does not exist yet, which
-/// is the first run on a machine before anything has been logged, and it reopens by name if the
-/// file is replaced.
-///
-/// Its stdout is piped rather than inherited, so each line can be dropped or shown. Its stderr and
-/// its process group are inherited, so Ctrl-C reaches it and ends the follow. That is the whole
-/// reason `refactors/past/mercury-start.md` puts the daemon in a group of its own.
-///
-/// Lines are written straight to stdout rather than traced: they are already records, out of the
-/// file this is following, and tracing them would put them back into it.
+/// Follow the log file. Stdout is piped so each line can be dropped or shown. Stderr and
+/// the process group are inherited so Ctrl-C reaches it. Lines go to stdout rather than
+/// through tracing, which would write them back into the file being followed.
 pub(crate) fn logs(instance: &Instance, view: LogsView) -> ExitCode {
     let path = instance.log_file();
     info!("{}: following {}", instance.display_name(), path.display());
@@ -653,13 +515,8 @@ pub(crate) fn logs(instance: &Instance, view: LogsView) -> ExitCode {
     }
 }
 
-/// Show `path`'s last [`BACKLOG_LINES`] records, then whatever is appended to it, filtered to
-/// `least` and above. Returns when `out` closes; errors only on a failure to read the file.
-///
-/// The file is opened once and never reopened: `tracing_appender::rolling::never` holds one file
-/// for the life of the daemon and never rotates it, so there is no new inode to follow onto. A
-/// reader sees appended bytes once they are written, and a line without a trailing newline is a
-/// record the writer has not finished, held until the rest arrives.
+/// Show `path`'s last [`BACKLOG_LINES`] records, then whatever is appended. The file is
+/// opened once: `tracing_appender::rolling::never` never rotates it.
 fn follow(path: &Path, view: &LogsView, color: bool, out: &mut impl Write) -> io::Result<()> {
     let mut reader = BufReader::new(File::open(path)?);
 
@@ -696,13 +553,7 @@ fn follow(path: &Path, view: &LogsView, color: bool, out: &mut impl Write) -> io
     }
 }
 
-/// Write one record to `out`, filtered to `view.least` and shown as `view` asks. `Break` when
-/// `out` has closed.
-///
-/// A line that is not a record is shown as it stands: a file written by an older daemon, or
-/// something that reached the file without going through the formatter. Hiding what cannot be
-/// classified is how a log loses the one line that mattered, so a record whose level does not parse
-/// is shown on the same reasoning.
+/// Write one record to `out`. A line that is not a record is shown as it stands.
 fn show_record(out: &mut impl Write, line: &str, view: &LogsView, color: bool) -> ControlFlow<()> {
     let line = line.strip_suffix('\n').unwrap_or(line);
     let Ok(record) = serde_json::from_str::<Record>(line) else {
@@ -722,8 +573,7 @@ fn show_record(out: &mut impl Write, line: &str, view: &LogsView, color: bool) -
     }
 }
 
-/// `Break` on a write that failed, `Continue` otherwise: a closed `out` is the pipeline this was
-/// feeding going away, which ends the follow rather than being an error worth a word.
+/// `Break` on a failed write: a closed `out` is the pipeline going away.
 const fn broke(failed: bool) -> ControlFlow<()> {
     if failed {
         ControlFlow::Break(())
@@ -732,14 +582,8 @@ const fn broke(failed: bool) -> ControlFlow<()> {
     }
 }
 
-/// Find the daemon, waiting out the window in which it holds the lock without having named itself.
-///
-/// That window is a `set_len` and a `write_all` on an already-open file, so it closes in
-/// microseconds. A holder that stays anonymous past [`PID_TIMEOUT`] is one whose pid write failed,
-/// which `acquire_at` treats as a failure to start, so its lock is about to be released anyway.
-///
-/// Polled rather than waited on, unlike [`watch_for_free`]: the lock is held throughout this
-/// window, so flock has nothing to report and there is no edge to wait for.
+/// Find the daemon, waiting out [`Held::Unnamed`]. The lock is held throughout that window,
+/// so flock has nothing to report.
 fn find_daemon(instance: &Instance) -> Result<Target, LockError> {
     let deadline = Instant::now() + PID_TIMEOUT;
     loop {
@@ -752,11 +596,7 @@ fn find_daemon(instance: &Instance) -> Result<Target, LockError> {
     }
 }
 
-/// Start waiting for the lock to come free, and hand back the channel it reports on.
-///
-/// `await_free` blocks in flock with no timeout of its own, so it runs on a thread and the caller
-/// stops listening once its own deadline passes. Abandoning that thread costs nothing: `stop`
-/// exits moments later and the process teardown takes it along.
+/// `await_free` blocks in flock with no timeout, so it runs on a thread.
 fn watch_for_free(instance: &Instance) -> mpsc::Receiver<Result<(), LockError>> {
     let lock = instance.lock_file().to_owned();
     let (tx, rx) = mpsc::channel();
@@ -766,12 +606,7 @@ fn watch_for_free(instance: &Instance) -> mpsc::Receiver<Result<(), LockError>> 
     rx
 }
 
-/// Send `signal` to `pid`.
-///
-/// A subprocess rather than a `kill(2)` binding, because the workspace forbids `unsafe` and every
-/// binding for it is an unsafe extern call. The same trade `freddie_app_nav` makes by
-/// foregrounding an app through `open`. An absolute path, so `PATH` cannot point this at something
-/// else.
+/// Send `signal` to `pid` via `/bin/kill`. Absolute path so `PATH` cannot redirect it.
 #[cfg(unix)]
 fn signal_pid(pid: Pid, signal: Signal) -> io::Result<()> {
     ran(Command::new("/bin/kill")
@@ -788,7 +623,6 @@ fn kill_pid(pid: Pid) -> io::Result<()> {
         .arg(pid.to_string()))
 }
 
-/// Run `command` to completion, turning a non-zero exit into an error.
 fn ran(command: &mut Command) -> io::Result<()> {
     let status = command.status()?;
     if status.success() {

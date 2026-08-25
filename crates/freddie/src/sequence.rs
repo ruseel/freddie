@@ -1,4 +1,4 @@
-//! An ordered run of keys, typed with no modifiers, that the caller acts on when it completes.
+//! An ordered run of bare keys that the caller acts on when it completes.
 
 use std::time::Duration;
 
@@ -8,59 +8,41 @@ use crate::TimerGuard;
 
 /// A run of keys that means something other than what it types: `jk`, say.
 ///
-/// Each key is swallowed as it arrives, so nothing reaches the app until the run breaks, when the
-/// swallowed keys replay in order, or completes, when they are dropped and the caller acts.
-///
-/// The run demands its keys bare, and takes them rolled: any modifier flag breaks it, but the next
-/// key may go down before the one before it comes up.
+/// Each key is swallowed until the run breaks (swallowed keys replay) or completes
+/// (they are dropped and the caller acts). Any modifier flag breaks it. Keys may
+/// overlap: the next may go down before the previous comes up.
 pub struct KeySequence {
     keys: &'static [Key],
-    /// The window a run of this sequence waits, and the guard for it while one is live. `None`
-    /// for a sequence that waits forever.
+    /// How long a run waits for its next key, and the guard while one is live.
     window: Option<Window>,
-    /// What the run has swallowed, in arrival order; empty when it is idle. Every `Down` in it
-    /// matched the next key of `keys`, so counting them is how far the run has got, and every `Up`
-    /// belongs to a key already matched. Rolling puts several keys down at once, so the two
-    /// interleave and only the order they arrived in can replay them.
+    /// Swallowed presses in arrival order. Empty when idle. Downs count progress;
+    /// ups belong to keys already matched.
     swallowed: Vec<KeyPress>,
 }
 
-/// How long a run waits for its next key, and what cancels that wait.
-///
-/// The two are one field because a guard without a duration is nonsense: there would be nothing
-/// to have armed. Two `Option`s side by side would let that state exist.
-///
-/// No equality, even under `testing`: it holds a `DropGuard`, which is a pure RAII primitive with
-/// no comparable identity. Nothing compares sequences; the effects they produce are what tests
-/// assert on.
+/// How long a run waits for its next key, and what cancels that wait. One field so a
+/// guard without a duration cannot exist.
 #[derive(Debug)]
 struct Window {
     duration: Duration,
-    /// Armed while a run is live, dropped when it ends, which is what cancels the wait.
+    /// Armed while a run is live. Dropping it cancels the wait.
     timer: Option<TimerGuard>,
 }
 
 /// What one key did to a [`KeySequence`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeySequenceOutcome {
-    /// The key belongs to the run: it was swallowed, and nothing is emitted.
+    /// The key belongs to the run: it was swallowed.
     Advanced,
-    /// The key is not part of the run. These presses replay, in order, and then the key itself,
-    /// which the caller emits, since it alone knows the flags that key carried. Empty when the run
-    /// was idle, which is every ordinary keystroke.
+    /// The key is not part of the run. These presses replay, then the caller emits the key.
+    /// Empty when the run was idle.
     Passed(Vec<KeyPress>),
-    /// The last key landed. Everything swallowed is dropped and the caller acts on the run.
+    /// The last key landed. Swallowed keys are dropped; the caller acts.
     Completed,
 }
 
 impl std::fmt::Debug for KeySequence {
-    /// How far the run has got: the keys it has matched, in order, as `KeySequence { KeyJ }`, or
-    /// `KeySequence {}` when idle.
-    ///
-    /// It is written on every dispatched event, so it carries only what moves. The keys and the
-    /// window never change, so printing them would repeat the sequence's definition on every line
-    /// of the log. The swallowed ups are left out too: they exist so a broken run replays what it
-    /// took, and say nothing about how far it has got.
+    /// Keys matched so far: `KeySequence { KeyJ }`, or `KeySequence {}` when idle.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "KeySequence {{")?;
         let mut matched = self
@@ -95,9 +77,7 @@ impl KeySequence {
         }
     }
 
-    /// The guard for a live run's window timer, or `None` when no run is live or this sequence has
-    /// no window. What a binding matches against, so a firing from a run that has since ended
-    /// matches nothing.
+    /// The guard for a live run's window timer, or `None` when idle or this sequence has no window.
     #[must_use]
     pub fn window_timer(&self) -> Option<&TimerGuard> {
         self.window.as_ref()?.timer.as_ref()
@@ -109,13 +89,11 @@ impl KeySequence {
         self.window.as_ref().map(|w| w.duration)
     }
 
-    /// Give the run in progress the guard for its window, so the wait is cancelled by the run
-    /// ending rather than by the caller remembering to.
+    /// Give the live run the guard for its window. Dropping the run cancels the wait.
     ///
     /// # Panics
     ///
-    /// If no run is in progress, since nothing would ever drop the guard, or if this sequence has
-    /// no window, since then there was nothing to arm.
+    /// If no run is in progress, or if this sequence has no window.
     pub fn hold(&mut self, guard: TimerGuard) {
         assert!(!self.is_idle(), "an idle run has no life to tie a guard to");
         let window = self
@@ -125,24 +103,20 @@ impl KeySequence {
         window.timer = Some(guard);
     }
 
-    /// Whether the run is idle: it has swallowed nothing.
+    /// Whether the run has swallowed nothing.
     #[must_use]
     pub const fn is_idle(&self) -> bool {
         self.swallowed.is_empty()
     }
 
-    /// Feed one key to the run.
     pub fn advance(&mut self, ev: &KeyEvent) -> KeySequenceOutcome {
         if !ev.flags.is_empty() {
             return KeySequenceOutcome::Passed(self.interrupt());
         }
-        // Never `keys.len()`: the key that matches the last slot completes the run and clears it.
         let matched = self.matched();
         match ev.press {
-            // The next key of the run. The one before it may still be down, which is what a roll
-            // is. The key itself must NOT still be down: a sequence may repeat a key (`[j, j]`),
-            // and the only thing separating a deliberate second press from a held key's
-            // auto-repeat is that the deliberate one came up first.
+            // The key itself must not still be down: a sequence may repeat a key (`[j, j]`),
+            // and auto-repeat is a down of a key that never came up.
             PressType::Down if ev.key == self.keys[matched] && !self.is_down(ev.key) => {
                 self.swallowed.push(ev.key.down());
                 if matched + 1 == self.keys.len() {
@@ -161,24 +135,18 @@ impl KeySequence {
         }
     }
 
-    /// End the run and hand back what it swallowed, in arrival order, leaving it idle. `advance`
-    /// calls it for a key that breaks the run; a caller calls it when something outside the keys
-    /// ends it, either a key the caller bound itself or a window elapsing.
+    /// End the run and hand back what it swallowed, in arrival order.
     pub fn interrupt(&mut self) -> Vec<KeyPress> {
         self.disarm();
         std::mem::take(&mut self.swallowed)
     }
 
-    /// Drop the guard, cancelling the wait, and leave the duration in place: the sequence still
-    /// has a window, it is just not running one.
     fn disarm(&mut self) {
         if let Some(window) = self.window.as_mut() {
             window.timer = None;
         }
     }
 
-    /// How many keys of the run have matched: one per `Down`, since every `Up` in `swallowed`
-    /// belongs to a key already matched.
     fn matched(&self) -> usize {
         self.swallowed
             .iter()
@@ -186,7 +154,6 @@ impl KeySequence {
             .count()
     }
 
-    /// Whether the run took `key` and has not seen it come up.
     fn is_down(&self, key: Key) -> bool {
         self.swallowed
             .iter()

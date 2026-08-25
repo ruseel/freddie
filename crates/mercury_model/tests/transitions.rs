@@ -1,7 +1,4 @@
-//! Two kinds of test. The per-event ones send one event and assert the effect
-//! (and resulting state) straight from `handle`. The loop one drives a
-//! `bind::SimpleRunner`, recording effects and, for a `Foreground` effect,
-//! reporting the app back the way the OS watcher would.
+//! Per-event tests call `handle` once. The loop tests drive a `bind::SimpleRunner` and report a `Foreground` effect back as a foreground event.
 
 use bind::SimpleRunner;
 use freddie_windows_types::{Frame, Monitor, WindowChange, WindowId};
@@ -13,29 +10,23 @@ use mercury_model::{
 };
 use mercury_model::{FrontApp, Pid, Placement};
 
-// `BOOT_TITLE` is painted on the status item before the model exists, so it is a literal rather
-// than read off the boot layer. This is the guard that keeps the literal honest.
+// `BOOT_TITLE` is a literal painted before the model exists; this keeps the literal honest.
 #[test]
 fn boot_title_matches_the_boot_layer() {
     let booted = Mercury::new(Some(FrontApp::new(App::Other, Pid(1))), Windows::default());
     assert_eq!(booted.layer().name(), Mercury::BOOT_TITLE);
 }
 
-// The confirmed front app, `None` while a nav choice's foreground effect is in flight.
 fn front(m: &Mercury) -> Option<App> {
     m.foreground.as_ref().map(|front| front.app.identity())
 }
 
-// Entering nav, resize, or the in-app layer arms the return-to-home timer; this is the effect
-// that schedules it. Equality under `testing` compares the delay and fire event, so a rebuilt one
-// matches what a layer produced.
+// Equality under `testing` compares delay and fire event, so a rebuilt timer matches what a layer produced.
 fn return_home_timer() -> MercuryEffect {
     let (_guard, effect) = freddie::timer_effect_and_guard(RETURN_TO_HOME_TIMEOUT, ());
     MercuryEffect::Timer(effect)
 }
 
-// A placement arms the settle wait; this is the effect that schedules it. It bounds how long a
-// move reported for that window counts as mercury's own rather than the user's.
 fn settle_timer() -> MercuryEffect {
     let (_guard, effect) = freddie::timer_effect_and_guard(PLACEMENT_SETTLE, ());
     MercuryEffect::Timer(effect)
@@ -51,8 +42,6 @@ fn timer_event(effects: &[MercuryEffect]) -> MercuryEvent {
         .expect("these effects set a timer")
 }
 
-// The active return-home layer, or `None` when the active layer is home or typing. The four
-// timed layers sit under the wrapper that owns their shared timer.
 const fn return_home(m: &Mercury) -> Option<&ReturnHomeLayers> {
     match m.layer() {
         Layer::ReturnHome(w) => Some(w.layers()),
@@ -60,8 +49,7 @@ const fn return_home(m: &Mercury) -> Option<&ReturnHomeLayers> {
     }
 }
 
-// A mercury in Home, the command layer. The default is Typing (passthrough), but most per-event
-// tests exercise Home's command bindings, so they start here.
+// Most per-event tests exercise Home's command bindings; the default is Typing.
 fn home() -> Mercury {
     let mut m = Mercury::with_layer(Layer::Home(HomeLayer));
     let _ = m.handle(&foreground(App::Other, Pid(1)));
@@ -76,12 +64,10 @@ const fn emit_with(key: Key, press: PressType, flags: ModifierFlags) -> MercuryE
     MercuryEffect::Emit(KeyEvent { key, press, flags })
 }
 
-// A key passed straight through: the one event it arrived as.
 fn passed(key: Key) -> Vec<MercuryEffect> {
     vec![emit(key, PressType::Down)]
 }
 
-// A key's release, for the halves the jk sequence cares about.
 const fn up(key: Key) -> MercuryEvent {
     MercuryEvent::Key(KeyEvent {
         key,
@@ -90,7 +76,6 @@ const fn up(key: Key) -> MercuryEvent {
     })
 }
 
-// A key carrying a modifier, the way the source stamps it.
 const fn key_with(key: Key, flags: ModifierFlags) -> MercuryEvent {
     MercuryEvent::Key(KeyEvent {
         key,
@@ -103,36 +88,28 @@ const fn tap(key: Key, flags: ModifierFlags) -> MercuryEffect {
     MercuryEffect::Tap(Chord { key, flags })
 }
 
-// cmd-r, one chord.
 fn cmd_r() -> Vec<MercuryEffect> {
     vec![tap(Key::KeyR, ModifierFlags::COMMAND)]
 }
 
-// A transition also tells the menu bar which layer it landed in, as the last effect it produces.
 const fn shows(layer: &'static str) -> MercuryEffect {
     MercuryEffect::ShowLayer(layer)
 }
 
-// Effects from a transition that landed in home, which is most of them: the go-home name comes
-// last, since the handler emits its own effects before it changes the layer.
+// The go-home name comes last: the handler emits its own effects before it changes the layer.
 fn leaves(mut effects: Vec<MercuryEffect>) -> Vec<MercuryEffect> {
     effects.push(shows("Home"));
     effects
 }
 
-// A key handled while staying in the in-app layer is activity: its return-home timer is reset, so
-// the effects come back with the re-scheduling timer effect appended. Keys that leave the in-app
-// layer (the digits' window jump, `n`, `t`, `escape`) do not, so they use the bare effects.
+// A stay in the in-app layer resets the return-home timer. Keys that leave do not, so they use the bare effects.
 fn in_app(mut effects: Vec<MercuryEffect>) -> Vec<MercuryEffect> {
     effects.push(return_home_timer());
     effects
 }
 
-// ---- per-event: send an event, assert the effect ----
-
 #[test]
 fn default_boots_into_typing() {
-    // A fresh mercury is in typing (passthrough), the login-safe state, not command-mode Home.
     assert!(matches!(
         Mercury::new(Some(FrontApp::new(App::Other, Pid(1))), Windows::default()).layer(),
         Layer::Typing(_)
@@ -141,7 +118,6 @@ fn default_boots_into_typing() {
 
 #[test]
 fn every_layer_has_a_name_for_the_menu_bar() {
-    // A new layer has to name itself here rather than inheriting something generic.
     let mut m = home();
     assert_eq!(m.layer().name(), "Home");
     let _ = m.handle(&key(Key::KeyN));
@@ -186,17 +162,14 @@ fn home_q_quits() {
 fn quit_event_kills_from_home() {
     let mut m = home();
     assert_eq!(m.handle(&quit_event()), vec![MercuryEffect::Kill]);
-    // No layer change: quit is an effect, not a transition.
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
 #[test]
 fn quit_emits_held_modifiers_so_the_app_learns_the_physical_state() {
-    // cmd held in home is swallowed, so the app never saw its down. On quit the grab is
-    // released and no further down is coming, so emit the down before Kill or the app is left
-    // thinking a physically-held cmd is up.
+    // cmd held in home is swallowed, so the app never saw its down. On quit the grab is released and no further down is coming, so emit the down before Kill.
     let mut m = home();
-    let _ = m.handle(&key(Key::MetaLeft)); // tracked, swallowed in home
+    let _ = m.handle(&key(Key::MetaLeft));
     assert_eq!(
         m.handle(&quit_event()),
         vec![
@@ -208,9 +181,7 @@ fn quit_emits_held_modifiers_so_the_app_learns_the_physical_state() {
 
 #[test]
 fn quit_event_kills_from_every_layer() {
-    // The menu-bar Quit is a recovery path: it must kill from any layer, not just
-    // home. One case per layer. Typing matters most: its `AnyKey` catch-all must not
-    // swallow the quit event (a different event type), so quit still reaches the root.
+    // Typing's `AnyKey` catch-all must not swallow Quit (a different event type), so it still reaches the root.
     for enter in [Key::KeyN, Key::KeyT, Key::KeyR, Key::KeyI] {
         let mut m = home();
         let _ = m.handle(&key(enter));
@@ -224,8 +195,6 @@ fn quit_event_kills_from_every_layer() {
 
 #[test]
 fn home_escape_does_nothing() {
-    // In home, escape re-enters home (the layer-level go-home binding): it renames the layer to
-    // the one it is already in, and nothing else changes.
     let mut m = home();
     assert_eq!(m.handle(&key(Key::Escape)), vec![shows("Home")]);
     assert!(matches!(m.layer(), Layer::Home(_)));
@@ -236,8 +205,7 @@ fn escape_goes_home_from_a_sublayer() {
     let mut m = home();
     let _ = m.handle(&key(Key::KeyN));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Nav(_))));
-    // The deadline post rearms during descent; the root's go_home then drops the layer and its
-    // guard, cancelling the rearmed timer at performance.
+    // The deadline post rearms during descent; go_home then drops the layer and its guard, cancelling the rearmed timer.
     assert_eq!(
         m.handle(&key(Key::Escape)),
         vec![return_home_timer(), shows("Home")]
@@ -250,15 +218,13 @@ fn nav_times_out_home() {
     let mut m = home();
     let entered = m.handle(&key(Key::KeyN));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Nav(_))));
-    // The timer nav set fires: its id came back on the effect that set it.
     assert_eq!(m.handle(&timer_event(&entered)), vec![shows("Home")]);
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
 #[test]
 fn a_firing_from_a_layer_already_left_matches_nothing() {
-    // Enter nav, leave, and enter again: the first timer's firing arrives late, after a second
-    // nav replaced it. It must not send the live one home.
+    // First timer's firing arrives after a second nav replaced it. It must not send the live one home.
     let mut m = home();
     let first = timer_event(&m.handle(&key(Key::KeyN)));
     let _ = m.handle(&key(Key::Escape));
@@ -280,7 +246,6 @@ fn a_firing_from_a_layer_already_left_matches_nothing() {
 
 #[test]
 fn a_firing_in_a_layer_that_set_no_timer_matches_nothing() {
-    // Home sets none, so there is no binding for a firing to match, whatever id it carries.
     let mut m = home();
     let stale = timer_event(&m.handle(&key(Key::KeyN)));
     let _ = m.handle(&key(Key::Escape));
@@ -299,8 +264,7 @@ fn typing_passes_any_key_through() {
 
 #[test]
 fn typing_passes_a_baked_modifier_through() {
-    // A modifier baked onto the event itself, never arriving as its own key (an injected cmd-v,
-    // or fn), rides through instead of being dropped.
+    // A modifier baked onto the event (injected cmd-v, or fn) rides through instead of being dropped.
     let mut m = home();
     let _ = m.handle(&key(Key::KeyT));
     let cmd_v = MercuryEvent::Key(KeyEvent {
@@ -320,7 +284,6 @@ fn typing_passes_a_baked_modifier_through() {
 
 #[test]
 fn typing_plain_escape_passes_through() {
-    // In typing, escape is a normal key: it passes through and stays in typing.
     let mut m = home();
     let _ = m.handle(&key(Key::KeyT));
     assert_eq!(m.handle(&key(Key::Escape)), passed(Key::Escape));
@@ -329,13 +292,10 @@ fn typing_plain_escape_passes_through() {
 
 #[test]
 fn typing_cmd_escape_types_the_escape() {
-    // Typing binds nothing, so cmd-escape no longer leaves: both keys reach the app, and jk is the
-    // only way out.
     let mut m = home();
     let _ = m.handle(&key(Key::KeyT));
 
-    // cmd down arrives carrying the command flag (as its flagsChanged does). It is tracked in
-    // held (for the exit sweep) and passed through with that flag.
+    // flagsChanged arrives carrying the command flag. Tracked in held and passed through with that flag.
     let cmd_down = MercuryEvent::Key(KeyEvent {
         key: Key::MetaLeft,
         press: PressType::Down,
@@ -366,14 +326,12 @@ fn typing_cmd_escape_types_the_escape() {
     assert!(matches!(m.layer(), Layer::Typing(_)));
 }
 
-// Nav is a one-shot chooser: picking an app emits the effect and lands in the in-app
-// layer, with the navigation marked pending until the watcher reports the app.
 #[test]
 fn nav_c_foregrounds_chrome_and_enters_inapp() {
     let mut m = home();
     let _ = m.handle(&key(Key::KeyN));
     assert_eq!(
-        m.handle(&key(Key::KeyC)), // The gesture's units in call order: the foreground effect, then the layer's own.
+        m.handle(&key(Key::KeyC)),
         vec![
             MercuryEffect::Foreground(App::Chrome),
             shows("App"),
@@ -381,12 +339,9 @@ fn nav_c_foregrounds_chrome_and_enters_inapp() {
         ]
     );
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
-    // The effect is inert: nothing is foregrounded until the watcher reports it, and
-    // the navigation is pending until then.
     assert_eq!(front(&m), None);
 }
 
-// Every nav choice lands in the in-app layer, not just Chrome's.
 #[test]
 fn every_nav_choice_enters_inapp() {
     for (k, app) in [
@@ -413,8 +368,6 @@ fn every_nav_choice_enters_inapp() {
     }
 }
 
-// `space` in nav opens Spotlight and leaves for typing, so the query reaches its field. The tap
-// comes first, ahead of the transition's effects.
 #[test]
 fn nav_space_opens_spotlight_and_enters_typing() {
     let mut m = home();
@@ -424,20 +377,16 @@ fn nav_space_opens_spotlight_and_enters_typing() {
         vec![tap(Key::Space, ModifierFlags::COMMAND), shows("Typing")]
     );
     assert!(matches!(m.layer(), Layer::Typing(_)));
-    // Nothing was foregrounded, and no navigation is pending: Spotlight is not an app choice.
     assert_eq!(front(&m), Some(App::Other));
-    // Typing passes keys through, so what follows types itself into Spotlight.
     assert_eq!(m.handle(&key(Key::KeyC)), passed(Key::KeyC));
 }
 
-// `n c` foregrounds Chrome and, once the watcher reports it, `r`
-// refreshes it. No separate `i`.
 #[test]
 fn n_c_then_foreground_then_r_refreshes_chrome() {
     let mut m = home();
     let _ = m.handle(&key(Key::KeyN));
     assert_eq!(
-        m.handle(&key(Key::KeyC)), // The gesture's units in call order: the foreground effect, then the layer's own.
+        m.handle(&key(Key::KeyC)),
         vec![
             MercuryEffect::Foreground(App::Chrome),
             shows("App"),
@@ -446,29 +395,23 @@ fn n_c_then_foreground_then_r_refreshes_chrome() {
     );
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
 
-    let _ = m.handle(&foreground(App::Chrome, Pid(7))); // the watcher reports it
+    let _ = m.handle(&foreground(App::Chrome, Pid(7)));
     assert_eq!(front(&m), Some(App::Chrome));
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(cmd_r()));
 }
 
-// While a nav is pending, the in-app level is empty: `foreground` is `None`, so neither the
-// old app's bindings nor the chosen one's apply in the gap. A key pressed before the
-// foreground event lands is unbound; once the event lands, the chosen app's bindings apply.
 #[test]
 fn a_pending_nav_binds_nothing_until_the_foreground_event() {
     let mut m = home();
-    // Ghostty is frontmost, an app that has in-app bindings.
     let _ = m.handle(&foreground(App::Ghostty, Pid(7)));
-    let _ = m.handle(&key(Key::KeyN)); // home -> nav
-    let _ = m.handle(&key(Key::KeyC)); // navigate to Chrome; the front app is still Ghostty
+    let _ = m.handle(&key(Key::KeyN));
+    let _ = m.handle(&key(Key::KeyC));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert_eq!(front(&m), None);
-    // Ghostty's `j` does not apply, even though Ghostty is still the (stale) front app.
     assert_eq!(m.handle(&key(Key::KeyJ)), in_app(vec![]));
-    // Chrome's `r` does not apply yet either: nothing binds while the nav is pending.
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(vec![]));
 
-    let _ = m.handle(&foreground(App::Chrome, Pid(7))); // the watcher catches up
+    let _ = m.handle(&foreground(App::Chrome, Pid(7)));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert_eq!(front(&m), Some(App::Chrome));
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(cmd_r()));
@@ -494,7 +437,6 @@ fn i_enters_inapp_for_the_foregrounded_app() {
     assert_eq!(front(&m), Some(App::Chrome));
 }
 
-// Chrome in the in-app layer, with `url` reported for its front tab.
 fn chrome_showing(url: &str) -> Mercury {
     let mut m = home();
     let _ = m.handle(&foreground(App::Chrome, Pid(7)));
@@ -507,7 +449,6 @@ fn copies(text: &str) -> MercuryEffect {
     MercuryEffect::Copy(text.to_owned())
 }
 
-// `l` focuses the address bar and lands in typing, so the URL you type gets there.
 #[test]
 fn chrome_l_focuses_the_address_bar_and_enters_typing() {
     let mut m = chrome_showing("https://www.x.com/asdfasdf");
@@ -518,8 +459,6 @@ fn chrome_l_focuses_the_address_bar_and_enters_typing() {
     assert!(matches!(m.layer(), Layer::Typing(_)));
 }
 
-// `shift-l` copies the whole URL, out of the state rather than out of the address bar: no keys are
-// sent to Chrome at all.
 #[test]
 fn chrome_shift_l_copies_the_url() {
     let mut m = chrome_showing("https://www.x.com/asdfasdf");
@@ -527,11 +466,9 @@ fn chrome_shift_l_copies_the_url() {
         m.handle(&key_with(Key::KeyL, ModifierFlags::SHIFT)),
         in_app(vec![copies("https://www.x.com/asdfasdf")])
     );
-    // It repeats, so it stays in the in-app layer.
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
 }
 
-// `cmd-l` copies the host, `www.` and all.
 #[test]
 fn chrome_cmd_l_copies_the_host() {
     let mut m = chrome_showing("https://www.x.com/asdfasdf");
@@ -542,7 +479,6 @@ fn chrome_cmd_l_copies_the_host() {
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
 }
 
-// The three are one key at three modifier combinations, and each does only its own thing.
 #[test]
 fn the_three_ls_do_not_shadow_each_other() {
     for (event, want) in [
@@ -564,8 +500,6 @@ fn the_three_ls_do_not_shadow_each_other() {
     }
 }
 
-// With no URL reported there is nothing to copy out of the state, so the key does nothing:
-// mercury copies what it holds, and it holds nothing until the extension reports.
 #[test]
 fn a_copy_with_no_reported_url_copies_nothing() {
     let mut m = home();
@@ -581,7 +515,6 @@ fn a_copy_with_no_reported_url_copies_nothing() {
     );
 }
 
-// A URL with no host has no host to copy.
 #[test]
 fn copying_the_host_of_a_hostless_url_copies_nothing() {
     let mut m = chrome_showing("about:blank");
@@ -591,7 +524,6 @@ fn copying_the_host_of_a_hostless_url_copies_nothing() {
     );
 }
 
-// The `l` bindings are Chrome's, not the in-app layer's: another app's level does not get them.
 #[test]
 fn the_ls_are_chromes_alone() {
     let mut m = home();
@@ -604,15 +536,12 @@ fn the_ls_are_chromes_alone() {
     );
 }
 
-// Chrome in the site layer, with `url` reported for its front tab.
 fn site_showing(url: &str) -> Mercury {
     let mut m = chrome_showing(url);
     let _ = m.handle(&key(Key::KeyS));
     m
 }
 
-// `n` on claude.ai sends the site's own new-chat shortcut and lands in typing, so what you type
-// reaches the prompt box the new chat opened in.
 #[test]
 fn claude_ai_n_starts_a_new_chat_and_enters_typing() {
     let mut m = site_showing("https://claude.ai/new");
@@ -626,18 +555,13 @@ fn claude_ai_n_starts_a_new_chat_and_enters_typing() {
     assert!(matches!(m.layer(), Layer::Typing(_)));
 }
 
-// The new-chat binding is claude.ai's alone: another site's front tab leaves `n` unbound in the
-// site layer.
 #[test]
 fn n_is_claude_ais_alone() {
     let mut m = site_showing("https://www.x.com/asdfasdf");
-    // Swallowed, and the site layer treats the keypress as activity: its return-home timer resets.
     assert_eq!(m.handle(&key(Key::KeyN)), vec![return_home_timer()]);
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Site(_))));
 }
 
-// `s` in the in-app layer reaches the site layer, the way `u` does from home: `i` is what the
-// front app can do, `s` is what the site in its front tab can do, with no trip through home.
 #[test]
 fn inapp_s_enters_site() {
     let mut m = home();
@@ -650,8 +574,6 @@ fn inapp_s_enters_site() {
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Site(_))));
 }
 
-// The in-app layer works like home for entering nav and typing: `n` and `t` reach
-// past the app's own bindings (which bind neither) to the layer's.
 #[test]
 fn inapp_n_enters_nav() {
     let mut m = home();
@@ -675,9 +597,6 @@ fn inapp_t_enters_typing() {
     assert!(matches!(m.layer(), Layer::Typing(_)));
 }
 
-// The app's own bindings still win over the layer's: Ghostty binds `j`, so `j` walks
-// its windows rather than doing nothing, and `n`/`t` are the only keys the in-app
-// layer adds on top.
 #[test]
 fn inapp_app_bindings_still_take_precedence() {
     let mut m = home();
@@ -714,10 +633,7 @@ fn unbound_key_is_none() {
     assert_eq!(m.handle(&key(Key::KeyX)), vec![]);
 }
 
-// ---- ghostty: j/k walk tmux's windows, digits jump to one ----
-
-// tmux's prefix is a chord, and the command is a bare tap. If the prefix were held
-// through the command, tmux would see `ctrl-p` rather than `p`.
+// If the prefix were held through the command, tmux would see `ctrl-p` rather than `p`.
 fn tmux(flags: ModifierFlags, command: Key) -> Vec<MercuryEffect> {
     vec![tap(Key::KeyA, ModifierFlags::CONTROL), tap(command, flags)]
 }
@@ -745,13 +661,10 @@ fn ghostty_j_is_previous_window_and_k_is_next() {
         m.handle(&key(Key::KeyK)),
         in_app(tmux(ModifierFlags::empty(), Key::KeyN))
     );
-    // Still in Ghostty's layer, so windows can be walked without re-entering.
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert_eq!(front(&m), Some(App::Ghostty));
 }
 
-// The command carries no modifiers. Emitting it inside the prefix chord would make tmux see
-// `ctrl-p` rather than `p`; the shape says so: the prefix is one tap and the command is another.
 #[test]
 fn the_tmux_command_is_a_bare_tap() {
     let mut m = home();
@@ -759,14 +672,12 @@ fn the_tmux_command_is_a_bare_tap() {
     let _ = m.handle(&key(Key::KeyI));
     let effects = m.handle(&key(Key::KeyJ));
 
-    // A prefix and a command, then the return-home timer reset (walking is in-app activity).
     assert_eq!(effects.len(), 3);
     assert_eq!(effects[0], tap(Key::KeyA, ModifierFlags::CONTROL));
     assert_eq!(effects[1], tap(Key::KeyP, ModifierFlags::empty()));
     assert_eq!(effects[2], return_home_timer());
 }
 
-// j and k belong to Ghostty, not to every app.
 #[test]
 fn j_and_k_are_unbound_in_chrome_in_app() {
     let mut m = home();
@@ -776,8 +687,6 @@ fn j_and_k_are_unbound_in_chrome_in_app() {
     assert_eq!(m.handle(&key(Key::KeyK)), in_app(vec![]));
 }
 
-// Foregrounding Ghostty while in-app retargets to its layer, so its bindings
-// follow the front app the way Chrome's do.
 #[test]
 fn foregrounding_ghostty_retargets_the_inapp_layer() {
     let mut m = home();
@@ -795,9 +704,7 @@ fn foregrounding_ghostty_retargets_the_inapp_layer() {
     );
 }
 
-// The digits jump to a tmux window with the *shifted* symbol, because that is what
-// the tmux config binds: `!`..`)` select windows 1..10, while the bare digits
-// select window indices and cannot reach the tenth.
+// The tmux config binds `!`..`)` to windows 1..10; bare digits cannot reach the tenth.
 #[test]
 fn the_digits_select_a_tmux_window_and_return_home() {
     for (k, expected) in [
@@ -815,7 +722,6 @@ fn the_digits_select_a_tmux_window_and_return_home() {
             leaves(tmux(ModifierFlags::SHIFT, expected)),
             "{k:?}"
         );
-        // Choosing a window is a choice, not something you repeat.
         assert!(
             matches!(m.layer(), Layer::Home(_)),
             "{k:?} stayed in ghostty"
@@ -823,7 +729,6 @@ fn the_digits_select_a_tmux_window_and_return_home() {
     }
 }
 
-// Every digit is bound, and each sends its own.
 #[test]
 fn all_ten_digits_are_bound_in_ghostty() {
     let digits = [
@@ -850,7 +755,6 @@ fn all_ten_digits_are_bound_in_ghostty() {
     }
 }
 
-// Walking windows repeats, so j and k stay; jumping to one does not, so it leaves.
 #[test]
 fn walking_stays_but_jumping_leaves() {
     let mut m = home();
@@ -864,19 +768,15 @@ fn walking_stays_but_jumping_leaves() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// In-app activity resets the return-home timer: a key that stays in the layer re-emits the
-// scheduling effect, restarting the idle clock, while a key that leaves does not.
 #[test]
 fn inapp_activity_resets_the_return_home_timer() {
     let mut m = home();
     let _ = m.handle(&foreground(App::Ghostty, Pid(7)));
     let _ = m.handle(&key(Key::KeyI));
-    // Walking a window stays in-app, so the timer is reset.
     assert_eq!(
         m.handle(&key(Key::KeyJ)),
         in_app(tmux(ModifierFlags::empty(), Key::KeyP))
     );
-    // Jumping to a window leaves for home, so nothing re-schedules it.
     assert_eq!(
         m.handle(&key(Key::Num3)),
         leaves(tmux(ModifierFlags::SHIFT, Key::Num3))
@@ -884,7 +784,6 @@ fn inapp_activity_resets_the_return_home_timer() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// The digits belong to Ghostty, not to home or to Chrome.
 #[test]
 fn the_digits_are_unbound_outside_ghostty() {
     let mut m = home();
@@ -896,8 +795,6 @@ fn the_digits_are_unbound_outside_ghostty() {
     assert_eq!(m.handle(&key(Key::Num1)), in_app(vec![]));
 }
 
-// ---- resize: `r` from home, then the arrows place the focused window ----
-
 #[test]
 fn home_r_enters_resize() {
     let mut m = home();
@@ -908,8 +805,6 @@ fn home_r_enters_resize() {
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Resize(_))));
 }
 
-// Resize is a one-shot chooser, like nav: each arrow emits the rectangle its window is
-// going to and lands back in home, so `r up` maximizes and leaves you where you started.
 #[test]
 fn the_arrows_place_the_window_and_return_home() {
     for (k, frame) in [
@@ -953,8 +848,6 @@ fn the_arrows_place_the_window_and_return_home() {
     }
 }
 
-// With nothing focused there is nothing to place, so the key is spent and the layer is
-// left, but no window moves.
 #[test]
 fn a_placement_with_no_focused_window_asks_for_nothing() {
     let mut m = home();
@@ -963,14 +856,13 @@ fn a_placement_with_no_focused_window_asks_for_nothing() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// Escape leaves resize without placing anything.
 #[test]
 fn escape_leaves_resize() {
     let mut m = home();
     let _ = m.handle(&key(Key::KeyR));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Resize(_))));
 
-    // The rearm precedes; go_home drops its guard, so the timer is cancelled at performance.
+    // The rearm precedes; go_home drops its guard, so the timer is cancelled.
     assert_eq!(
         m.handle(&key(Key::Escape)),
         vec![return_home_timer(), shows("Home")]
@@ -978,7 +870,6 @@ fn escape_leaves_resize() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// Placing twice means entering resize twice: `r up r left`.
 #[test]
 fn placing_twice_re_enters_resize() {
     let mut m = home_with_a_window();
@@ -1012,8 +903,6 @@ fn placing_twice_re_enters_resize() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// The arrows mean nothing outside resize, so they do not place a window by
-// accident from home.
 #[test]
 fn the_arrows_are_unbound_in_home() {
     let mut m = home();
@@ -1022,8 +911,6 @@ fn the_arrows_are_unbound_in_home() {
     assert_eq!(m.handle(&key(Key::RightArrow)), vec![]);
 }
 
-// `r` is Chrome's refresh in the in-app layer, and resize's entry from home. The
-// layers keep them apart.
 #[test]
 fn r_still_refreshes_chrome_in_app() {
     let mut m = home();
@@ -1034,11 +921,6 @@ fn r_still_refreshes_chrome_in_app() {
     assert_eq!(front(&m), Some(App::Chrome));
 }
 
-// ---- loop: driving a bind::SimpleRunner ----
-
-/// Drain the runner, recording each effect and reporting a foregrounded app back
-/// the way the OS watcher would (a `Foreground` effect becomes a foreground
-/// event).
 fn settle(
     runner: &mut SimpleRunner<'_, MercuryStruct, Mercury>,
     performed: &mut Vec<MercuryEffect>,
@@ -1053,8 +935,6 @@ fn settle(
     }
 }
 
-// Foregrounding an app from nav emits the effect, and the reported-back event
-// records it: after n, c the effect is Foreground(Chrome) and Chrome is recorded.
 #[test]
 fn foregrounding_chrome_is_reported_back() {
     let mut m = home();
@@ -1077,16 +957,10 @@ fn foregrounding_chrome_is_reported_back() {
         ]
     );
     assert_eq!(front(&m), Some(App::Chrome));
-    // Nav landed in Chrome's in-app layer, and the reported-back event cleared the
-    // pending flag so Chrome's bindings are live.
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert!(front(&m).is_some());
 }
 
-// ---- app navigation: name mapping and the in-app layer following the front app ----
-
-// Every real app's bundle id maps back to that app, and `Other` (no specific app)
-// has no bundle id and is where unknown ids land.
 #[test]
 fn bundle_id_round_trips() {
     for app in [App::Chrome, App::Ghostty, App::Zed] {
@@ -1097,45 +971,33 @@ fn bundle_id_round_trips() {
     assert_eq!(App::from_bundle_id("com.example.Unknown"), App::Other);
 }
 
-// The bundle ids the OS actually reports. Unlike display names, these do not vary
-// with who is asked, so there is one form and it is this one.
 #[test]
 fn reported_bundle_ids_map() {
     assert_eq!(App::from_bundle_id("com.google.Chrome"), App::Chrome);
     assert_eq!(App::from_bundle_id("com.mitchellh.ghostty"), App::Ghostty);
     assert_eq!(App::from_bundle_id("dev.zed.Zed"), App::Zed);
-    // A display name is not a bundle id.
     assert_eq!(App::from_bundle_id("Google Chrome"), App::Other);
 }
 
-// The in-app layer holds no app. Its bindings come from `root.foreground`, read on every
-// dispatch, so changing the root changes what binds WITHOUT anything re-entering the layer
-// and without any resync. There is no copy to go stale.
 #[test]
 fn the_inapp_layers_bindings_follow_the_root_with_no_resync() {
     let mut m = home();
-    let _ = m.handle(&key(Key::KeyI)); // enter the in-app layer
+    let _ = m.handle(&key(Key::KeyI));
     m.foreground = Some(FrontApp::new(App::Chrome, Pid(7)));
-    // Chrome binds `r`.
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(cmd_r()));
 
-    // Write the ROOT directly. Nothing touches the layer.
     m.foreground = Some(FrontApp::new(App::Ghostty, Pid(7)));
 
-    // Chrome's `r` is gone and Ghostty's `j` is live, with no re-entry and no resync.
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(vec![]));
     assert_eq!(
         m.handle(&key(Key::KeyJ)),
         in_app(tmux(ModifierFlags::empty(), Key::KeyP))
     );
 
-    // An app with no bindings has no level at all.
     m.foreground = Some(FrontApp::new(App::Zed, Pid(7)));
     assert_eq!(m.handle(&key(Key::KeyJ)), in_app(vec![]));
 }
 
-// In the in-app layer, foregrounding a different app retargets the layer to it, so
-// the old app's bindings drop and the new app's apply.
 #[test]
 fn foreground_retargets_the_inapp_layer() {
     let mut m = home();
@@ -1148,11 +1010,9 @@ fn foreground_retargets_the_inapp_layer() {
     assert_eq!(front(&m), Some(App::Zed));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert!(matches!(front(&m), Some(App::Zed | App::Other)));
-    // Chrome's refresh is gone now that Chrome is not the front app.
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(vec![]));
 }
 
-// Foregrounding Chrome again while in-app restores its bindings.
 #[test]
 fn foreground_back_to_chrome_restores_its_bindings() {
     let mut m = home();
@@ -1167,8 +1027,6 @@ fn foreground_back_to_chrome_restores_its_bindings() {
     assert_eq!(m.handle(&key(Key::KeyR)), in_app(cmd_r()));
 }
 
-// Outside the in-app layer, foregrounding records the app but never moves you
-// between layers.
 #[test]
 fn foreground_outside_inapp_does_not_change_layer() {
     let mut m = home();
@@ -1180,16 +1038,12 @@ fn foreground_outside_inapp_does_not_change_layer() {
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::Nav(_))));
 }
 
-// The full loop: foreground Chrome from nav (reported back), enter its in-app
-// layer, then the OS switches the front app to Zed and the in-app layer follows.
 #[test]
 fn inapp_follows_the_front_app_across_a_switch() {
     let mut m = home();
     let mut performed = Vec::new();
     {
         let mut runner = SimpleRunner::<MercuryStruct, _>::new(&mut m);
-        // `n c` lands straight in Chrome's in-app layer; the reported-back foreground
-        // event clears the pending flag. No `i` needed.
         for k in [Key::KeyN, Key::KeyC] {
             runner.queue_event(key(k));
             settle(&mut runner, &mut performed);
@@ -1197,28 +1051,21 @@ fn inapp_follows_the_front_app_across_a_switch() {
     }
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert_eq!(front(&m), Some(App::Chrome));
-    // The user switches to Zed outside mercury; the watcher reports it.
     let _ = m.handle(&foreground(App::Zed, Pid(7)));
     assert_eq!(front(&m), Some(App::Zed));
     assert!(matches!(return_home(&m), Some(ReturnHomeLayers::InApp(_))));
     assert!(matches!(front(&m), Some(App::Zed | App::Other)));
 }
 
-// ---- jk: the sequence that leaves typing ----
-
-// Opening a run arms its window; this is the effect that schedules it. Equality under `testing`
-// compares the delay and the fire event, so a rebuilt one matches what the run produced.
 fn jk_timer() -> MercuryEffect {
     let (_guard, effect) = freddie::timer_effect_and_guard(JK_TIMEOUT, ());
     MercuryEffect::Timer(effect)
 }
 
-// A mercury in typing, the passthrough layer, with the jk run idle.
 fn typing() -> Mercury {
     Mercury::new(Some(FrontApp::new(App::Other, Pid(1))), Windows::default())
 }
 
-// The jk run, which lives on the typing layer, so asking for it in any other layer is a test bug.
 fn jk(m: &Mercury) -> &freddie::KeySequence {
     match m.layer() {
         Layer::Typing(t) => &t.jk,
@@ -1238,9 +1085,7 @@ fn jk_typed_one_key_at_a_time_leaves_for_home() {
 
 #[test]
 fn jk_rolled_leaves_for_home_and_the_ups_land_in_home() {
-    // k goes down before j comes up. The two ups that follow arrive in Home, which binds neither
-    // and is not a passthrough layer, so they are swallowed rather than reaching the app as ups
-    // with no downs.
+    // k goes down before j comes up. The two ups arrive in Home, which is not passthrough, so they are swallowed rather than reaching the app as ups with no downs.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(m.handle(&key(Key::KeyK)), vec![shows("Home")]);
@@ -1266,8 +1111,7 @@ fn a_j_tap_then_another_key_types_the_j_first() {
 
 #[test]
 fn a_held_j_then_another_key_replays_only_its_down() {
-    // Only the j down was swallowed, so only it replays. The real j up passes through later, with
-    // the run already idle.
+    // Only the j down was swallowed, so only it replays. The real j up passes through later.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(
@@ -1313,8 +1157,7 @@ fn a_modifier_arriving_mid_run_breaks_it() {
 
 #[test]
 fn a_held_js_auto_repeat_breaks_the_run() {
-    // The swallowed down replays ahead of the repeat, so the app sees the same two downs it would
-    // have seen unwatched, and the k after it is an ordinary k.
+    // The swallowed down replays ahead of the repeat, so the app sees the same two downs it would have seen unwatched.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(
@@ -1331,8 +1174,7 @@ fn a_held_js_auto_repeat_breaks_the_run() {
 
 #[test]
 fn escape_in_typing_breaks_the_run_and_reaches_the_app() {
-    // Typing binds nothing, so escape runs through the sequence like any other key and the j
-    // replays AHEAD of it.
+    // Escape runs through the sequence like any other key; the j replays ahead of it.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(m.handle(&up(Key::KeyJ)), vec![]);
@@ -1349,8 +1191,7 @@ fn escape_in_typing_breaks_the_run_and_reaches_the_app() {
 
 #[test]
 fn leaving_typing_abandons_a_held_j() {
-    // The layer change drops the run with the layer, and the j is dropped rather than typed: the
-    // app never saw its down, and its up will be swallowed by the command layer.
+    // The layer change drops the run; the j is dropped rather than typed, and its up will be swallowed by the command layer.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(m.handle(&key(Key::KeyK)), vec![shows("Home")]);
@@ -1359,7 +1200,7 @@ fn leaving_typing_abandons_a_held_j() {
 
 #[test]
 fn j_and_k_still_type_themselves_when_they_are_not_a_run() {
-    // j, j, k: the second j breaks the first run and does not open a second, so all three type.
+    // The second j breaks the first run and does not open a second, so all three type.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyJ)), vec![jk_timer()]);
     assert_eq!(m.handle(&up(Key::KeyJ)), vec![]);
@@ -1389,14 +1230,12 @@ fn a_half_typed_run_types_itself_when_the_window_elapses() {
         vec![emit(Key::KeyJ, PressType::Down)]
     );
     assert!(jk(&m).is_idle());
-    // The k that follows is an ordinary k, not the second half of anything.
     assert_eq!(m.handle(&key(Key::KeyK)), passed(Key::KeyK));
     assert!(matches!(m.layer(), Layer::Typing(_)));
 }
 
 #[test]
 fn a_full_tap_types_itself_when_the_window_elapses() {
-    // Both halves were swallowed, so both replay, in the order they arrived.
     let mut m = typing();
     let opened = m.handle(&key(Key::KeyJ));
     assert_eq!(opened, vec![jk_timer()]);
@@ -1412,11 +1251,10 @@ fn a_full_tap_types_itself_when_the_window_elapses() {
 
 #[test]
 fn a_firing_from_a_run_that_ended_matches_nothing() {
-    // Open a run, break it, open another: the first window's firing arrives late. It must not
-    // interrupt the run that replaced it.
+    // First window's firing arrives after a second run replaced it. It must not interrupt the live one.
     let mut m = typing();
     let first = timer_event(&m.handle(&key(Key::KeyJ)));
-    let _ = m.handle(&key(Key::KeyA)); // breaks it
+    let _ = m.handle(&key(Key::KeyA));
     let second = timer_event(&m.handle(&key(Key::KeyJ)));
 
     assert_eq!(
@@ -1433,7 +1271,7 @@ fn a_firing_from_a_run_that_ended_matches_nothing() {
 fn a_firing_with_no_run_in_progress_matches_nothing() {
     let mut m = typing();
     let stale = timer_event(&m.handle(&key(Key::KeyJ)));
-    let _ = m.handle(&key(Key::KeyA)); // breaks it, so nothing is live
+    let _ = m.handle(&key(Key::KeyA));
     assert_eq!(m.handle(&stale), vec![]);
 }
 
@@ -1445,18 +1283,12 @@ fn the_window_is_armed_once_per_run_not_once_per_key() {
     assert_eq!(m.handle(&up(Key::KeyJ)), vec![]);
 }
 
-// ---- the overlay: `o` shows the active layer's keymap ----
-
-// The effect `o` produces beside the text: the overlay's hide timer. Equality under `testing`
-// compares the delay and the fire event, and a firing compares equal whatever its id.
 fn overlay_hide_timer() -> MercuryEffect {
     let (_guard, effect) = freddie::timer_effect_and_guard(OVERLAY_DWELL, ());
     MercuryEffect::Timer(effect)
 }
 
-// Where the overlay's own effects start in a batch. In a timed layer the deadline post runs
-// during the ascent below the root, so its rearm precedes them; in home there is no such timer
-// and the overlay's text is first.
+// In a timed layer the deadline post rearms below the root, so that effect precedes the overlay's.
 fn shown_at(effects: &[MercuryEffect]) -> usize {
     effects
         .iter()
@@ -1464,8 +1296,7 @@ fn shown_at(effects: &[MercuryEffect]) -> usize {
         .unwrap_or_else(|| panic!("o shows the overlay: {effects:?}"))
 }
 
-// The keymap `o` put up, asserted by its heading rather than in full, so re-wording a row does not
-// rewrite the test table. Its dwell follows it.
+// Asserted by heading so re-wording a row does not rewrite the test table.
 fn shown_heading(effects: &[MercuryEffect]) -> &'static str {
     let at = shown_at(effects);
     match &effects[at..] {
@@ -1478,7 +1309,6 @@ fn shown_heading(effects: &[MercuryEffect]) -> &'static str {
     }
 }
 
-// The id of the dwell `o` set, which is the timer that follows the overlay's text.
 fn dwell_event(effects: &[MercuryEffect]) -> MercuryEvent {
     timer_event(&effects[shown_at(effects)..])
 }
@@ -1500,10 +1330,6 @@ fn o_shows_the_layers_keymap() {
     }
 }
 
-// `o` shows the overlay and keeps you in the layer, so in a chooser layer it is activity: the
-// deadline post rearms that layer's return-home timer. It runs on the wrapper below the root, so
-// its effect leads the batch, ahead of the overlay `o` itself puts up. Home has no such timer, so
-// its `o` is only the overlay and its dwell.
 #[test]
 fn showing_the_overlay_rearms_the_return_home_timer() {
     for enter in [Key::KeyN, Key::KeyR] {
@@ -1527,7 +1353,6 @@ fn showing_the_overlay_rearms_the_return_home_timer() {
 
 #[test]
 fn the_in_app_keymap_is_the_front_apps() {
-    // The in-app layer's bindings are the app's, so its keymap has to be too.
     for (app, heading) in [
         (App::Chrome, "  CHROME"),
         (App::Ghostty, "  GHOSTTY"),
@@ -1549,25 +1374,21 @@ fn the_overlay_hides_after_the_dwell() {
         m.handle(&dwell_event(&shown)),
         vec![MercuryEffect::HideOverlay]
     );
-    // And again matches nothing: the field was taken, so no binding names that guard.
     assert_eq!(m.handle(&dwell_event(&shown)), vec![]);
 }
 
 #[test]
 fn o_again_takes_it_down() {
-    // `o` is the key you press to ask what is bound, so it is the key you press when you are done.
     let mut m = home();
     let _ = m.handle(&key(Key::KeyO));
     assert_eq!(m.handle(&key(Key::KeyO)), vec![MercuryEffect::HideOverlay]);
-    // And a third press puts it back up.
     let effects = m.handle(&key(Key::KeyO));
     assert_eq!(shown_heading(&effects), "  HOME");
 }
 
 #[test]
 fn a_dwell_from_a_showing_already_gone_matches_nothing() {
-    // Show one in home, leave for nav (which takes it down), and show nav's. The first showing's
-    // dwell arrives late and must not take the live one down.
+    // First showing's dwell arrives after nav replaced it. It must not take the live one down.
     let mut m = home();
     let first = dwell_event(&m.handle(&key(Key::KeyO)));
     let _ = m.handle(&key(Key::KeyN));
@@ -1581,7 +1402,6 @@ fn a_dwell_from_a_showing_already_gone_matches_nothing() {
 fn changing_layers_takes_the_overlay_down() {
     let mut m = home();
     let _ = m.handle(&key(Key::KeyO));
-    // Entering nav hides it, ahead of naming the layer and setting nav's own timer.
     assert_eq!(
         m.handle(&key(Key::KeyN)),
         vec![
@@ -1603,12 +1423,9 @@ fn a_transition_with_no_overlay_hides_nothing() {
 
 #[test]
 fn o_in_typing_is_typed() {
-    // Typing binds nothing, so `o` falls to the root and reaches the app.
     let mut m = typing();
     assert_eq!(m.handle(&key(Key::KeyO)), passed(Key::KeyO));
 }
-
-// ---- the window source: `Windows` is a pure function of the changes reported to it ----
 
 const SCREEN: Monitor = Monitor {
     full: Frame {
@@ -1636,8 +1453,7 @@ const fn windows(change: WindowChange) -> MercuryEvent {
     MercuryEvent::Window(WindowEvent { change })
 }
 
-// Dispatch a window fact, then land every read it requested with `frame`: the riding half is
-// harvested from the emitted effect and carried home, exercising the real loop.
+// Land every read the fact requested, carrying the riding half home.
 fn land_frames(m: &mut Mercury, fx: Vec<MercuryEffect>, frame: Option<Frame>) {
     for effect in fx {
         if let MercuryEffect::ReadFrame { window, generation } = effect {
@@ -1646,13 +1462,11 @@ fn land_frames(m: &mut Mercury, fx: Vec<MercuryEffect>, frame: Option<Frame>) {
     }
 }
 
-// A window fact whose frame read lands at `frame`.
 fn window_at(m: &mut Mercury, change: WindowChange, frame: Frame) {
     let fx = m.handle(&windows(change));
     land_frames(m, fx, Some(frame));
 }
 
-// A focus fact whose read lands on `window`.
 fn focus_lands(m: &mut Mercury, pid: Pid, window: Option<WindowId>) {
     let fx = m.handle(&windows(WindowChange::FocusChanged(pid)));
     for effect in fx {
@@ -1662,7 +1476,6 @@ fn focus_lands(m: &mut Mercury, pid: Pid, window: Option<WindowId>) {
     }
 }
 
-// A mercury told about one screen and one focused window, every read landed.
 fn home_with_a_window() -> Mercury {
     let mut m = home();
     let _ = m.handle(&windows(WindowChange::Screens(vec![SCREEN])));
@@ -1677,8 +1490,6 @@ fn an_opened_window_is_recorded_with_its_frame() {
     assert_eq!(m.windows.focused(Pid(1)), Some((WINDOW, WINDOW_FRAME)));
 }
 
-// A window fact opens the gap and requests exactly its read; a fact about a window nothing
-// tracks requests nothing.
 #[test]
 fn a_window_fact_requests_its_read() {
     let mut m = home();
@@ -1695,21 +1506,17 @@ fn a_window_fact_requests_its_read() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// A stale read names a generation the entry moved past and changes nothing: the second fact's
-// read is the one that lands.
 #[test]
 fn a_stale_frame_read_is_dropped() {
     let mut m = home_with_a_window();
     let first = m.handle(&windows(WindowChange::Moved(WINDOW)));
     let second = m.handle(&windows(WindowChange::Moved(WINDOW)));
-    // The first read comes home late: its riding half no longer matches.
     land_frames(&mut m, first, Some(SCREEN.visible));
     assert_eq!(m.windows.focused(Pid(1)), None);
     land_frames(&mut m, second, Some(SCREEN.visible));
     assert_eq!(m.windows.focused(Pid(1)), Some((WINDOW, SCREEN.visible)));
 }
 
-// A move and a resize are the same to mercury, which keeps a frame and nothing else.
 #[test]
 fn a_move_and_a_resize_both_replace_the_frame() {
     for change in [WindowChange::Moved(WINDOW), WindowChange::Resized(WINDOW)] {
@@ -1726,8 +1533,6 @@ fn a_closed_window_leaves_no_frame_and_no_focus() {
     assert_eq!(m.windows.focused(Pid(1)), None);
 }
 
-// A focus read can name a window no `Opened` ever did, and a window with no frame is not
-// something a placement can start from.
 #[test]
 fn focus_on_an_unknown_window_yields_nothing_focused() {
     let mut m = home_with_a_window();
@@ -1735,8 +1540,6 @@ fn focus_on_an_unknown_window_yields_nothing_focused() {
     assert_eq!(m.windows.focused(Pid(1)), None);
 }
 
-// A focus report for a background pid lands in the map and waits; the projection answers for
-// whichever pid is asked.
 #[test]
 fn a_background_pids_focus_is_stored_not_dropped() {
     let mut m = home_with_a_window();
@@ -1747,8 +1550,7 @@ fn a_background_pids_focus_is_stored_not_dropped() {
     assert_eq!(m.windows.focused(Pid(2)), Some((other, SCREEN.visible)));
 }
 
-// Applying a report twice lands where applying it once does, which is what makes the boot
-// ordering safe: a change during boot arrives in the install burst and again as an event.
+// A change during boot arrives in the install burst and again as an event.
 #[test]
 fn recording_a_change_twice_is_recording_it_once() {
     let mut once = home_with_a_window();
@@ -1762,13 +1564,11 @@ fn recording_a_change_twice_is_recording_it_once() {
     assert_eq!(once.windows.focused(Pid(1)), twice.windows.focused(Pid(1)));
 }
 
-// A window's corner picks the screen it is on, which is what a placement measures against.
 #[test]
 fn the_monitor_is_the_one_the_window_is_on() {
     let m = home_with_a_window();
     assert_eq!(m.windows.monitor_for(WINDOW_FRAME), Some(SCREEN));
 
-    // Off every screen: the first one, rather than nothing to place against.
     let off = Frame {
         x: 9000.0,
         ..WINDOW_FRAME
@@ -1776,16 +1576,12 @@ fn the_monitor_is_the_one_the_window_is_on() {
     assert_eq!(m.windows.monitor_for(off), Some(SCREEN));
 }
 
-// Before any `Screens` report there is no screen to measure against, and a placement has to
-// see that rather than invent one.
 #[test]
 fn no_screens_reported_means_no_monitor() {
     let m = home();
     assert_eq!(m.windows.monitor_for(WINDOW_FRAME), None);
 }
 
-// A window on the second display fills that display, not the one it started on. This is
-// what `monitor_for` is for, and it only shows up with more than one screen.
 #[test]
 fn a_placement_uses_the_screen_the_window_is_on() {
     const SECOND: Monitor = Monitor {
@@ -1826,9 +1622,6 @@ fn a_placement_uses_the_screen_the_window_is_on() {
     );
 }
 
-// ---- restore: `r` in resize puts the window back ----
-
-// Maximize, let the move land, then `r`: back to the frame it had before the placement.
 #[test]
 fn resize_r_restores_the_frame_from_before_the_placement() {
     let mut m = home_with_a_window();
@@ -1851,8 +1644,6 @@ fn resize_r_restores_the_frame_from_before_the_placement() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// A run of placements restores to where the window was before the first of them, not to
-// the frame the previous placement left.
 #[test]
 fn a_second_placement_does_not_move_the_remembered_frame() {
     let mut m = home_with_a_window();
@@ -1876,8 +1667,6 @@ fn a_second_placement_does_not_move_the_remembered_frame() {
     );
 }
 
-// The reports one placement produces are the position and the size, each written twice, so
-// the frames in between are ones nobody asked for. None of them counts as a move by hand.
 #[test]
 fn the_intermediate_frames_of_a_placement_are_not_a_move_by_hand() {
     let mut m = home_with_a_window();
@@ -1885,7 +1674,6 @@ fn the_intermediate_frames_of_a_placement_are_not_a_move_by_hand() {
     let _ = m.handle(&key(Key::UpArrow));
 
     for frame in [
-        // The position landed, the size has not.
         Frame {
             x: 0.0,
             y: 25.0,
@@ -1910,9 +1698,7 @@ fn the_intermediate_frames_of_a_placement_are_not_a_move_by_hand() {
     );
 }
 
-// `set_frame` writes the position and the size twice, so the frame that was asked for is
-// reported more than once. Every one of those is still mercury's own: ending the wait on the
-// first would leave the rest looking like a drag, and `r` would have nothing to go back to.
+// `set_frame` writes position and size twice; ending the wait on the first report would treat the rest as a drag.
 #[test]
 fn the_target_frame_reported_twice_is_still_not_a_move_by_hand() {
     let mut m = home_with_a_window();
@@ -1938,14 +1724,11 @@ fn the_target_frame_reported_twice_is_still_not_a_move_by_hand() {
     );
 }
 
-// A move mercury did not ask for forgets the remembered frame, so `r` afterwards does
-// nothing rather than dragging the window off where the user just put it.
 #[test]
 fn a_move_by_hand_forgets_the_remembered_frame() {
     let mut m = home_with_a_window();
     let _ = m.handle(&key(Key::KeyR));
     let effects = m.handle(&key(Key::UpArrow));
-    // The settle wait ends, so the window is the user's again.
     let _ = m.handle(&timer_event(&effects));
 
     window_at(
@@ -1961,7 +1744,6 @@ fn a_move_by_hand_forgets_the_remembered_frame() {
     assert_eq!(m.handle(&key(Key::KeyR)), leaves(vec![]));
 }
 
-// Restoring takes the frame, so a second `r` has nothing to put back.
 #[test]
 fn restoring_twice_asks_for_nothing_the_second_time() {
     let mut m = home_with_a_window();
@@ -1974,8 +1756,6 @@ fn restoring_twice_asks_for_nothing_the_second_time() {
     assert_eq!(m.handle(&key(Key::KeyR)), leaves(vec![]));
 }
 
-// A placement cannot start from a pending frame: the fact opened the gap and its read has not
-// landed, so there is nothing to compute from, and the key places nothing.
 #[test]
 fn a_pending_frame_places_nothing() {
     let mut m = home_with_a_window();
@@ -1984,7 +1764,6 @@ fn a_pending_frame_places_nothing() {
     assert_eq!(m.handle(&key(Key::UpArrow)), leaves(vec![]));
 }
 
-// `r` in resize is restore, not a second entry into resize.
 #[test]
 fn r_in_resize_does_not_re_enter_resize() {
     let mut m = home();
@@ -1994,8 +1773,7 @@ fn r_in_resize_does_not_re_enter_resize() {
     assert!(matches!(m.layer(), Layer::Home(_)));
 }
 
-// A closed window takes its remembered frame with it, so a reused `CGWindowID` cannot
-// restore a new window to a closed one's frame.
+// A reused `CGWindowID` must not restore a new window to a closed one's frame.
 #[test]
 fn a_closed_window_is_forgotten() {
     let mut m = home_with_a_window();

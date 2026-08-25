@@ -1,23 +1,9 @@
-//! Display topology for freddie: the set of active displays, and a watcher that
-//! reports the full current set on every screen-parameter change and on every wake
-//! from sleep.
+//! Active displays, and a watcher that reports the full current set on every
+//! screen-parameter change and every wake from sleep.
 //!
-//! Always the whole set, never a delta, so the consumer's handler is a pure
-//! function of topology and a duplicate report is free. macOS posts several
-//! screen-parameter notifications for one physical plug; each delivery re-reads
-//! the set, and idempotence downstream is what coalesces them.
-//!
-//! The wake observer exists because a wake can change what is lit without macOS
-//! considering the screen parameters changed — and because a consumer that
-//! disables a panel wants to re-assert its decision after every wake.
-//!
-//! # The main thread
-//!
-//! `NSScreen` and both notification centers belong to the main thread's run loop.
-//! [`displays`] must be called on the main thread; [`watch`]'s callback is always
-//! delivered there, and `on_change` must hand its work elsewhere and return.
-//!
-//! macOS only.
+//! Always the whole set, never a delta. Wake can change what is lit without a
+//! screen-parameter notification. [`displays`] and [`watch`]'s callback run on the
+//! main thread. macOS only.
 
 use std::ptr::NonNull;
 use std::sync::Arc;
@@ -37,24 +23,22 @@ use objc2_foundation::{
 
 pub use freddie_displays_types::{Display, DisplayId};
 
-/// The displays currently active. For seeding the initial state; [`watch`] reports changes.
+/// The displays currently active. For seeding; [`watch`] reports changes.
 ///
 /// # Panics
 ///
-/// Panics off the main thread, where `NSScreen` cannot be read.
+/// Off the main thread.
 #[must_use]
 pub fn displays() -> Vec<Display> {
     let mtm = MainThreadMarker::new().expect("displays() must run on the main thread");
     read(mtm)
 }
 
-/// The current display set, on the main thread.
 fn read(mtm: MainThreadMarker) -> Vec<Display> {
     NSScreen::screens(mtm)
         .iter()
         .filter_map(|screen| {
-            // `NSScreenNumber` carries the CGDirectDisplayID; a screen without one (which the
-            // API contract does not produce, but a callback must be total) is skipped.
+            // `NSScreenNumber` is the CGDirectDisplayID. Skip a screen without one.
             let number = screen
                 .deviceDescription()
                 .objectForKey(&*NSString::from_str("NSScreenNumber"))?
@@ -70,11 +54,8 @@ fn read(mtm: MainThreadMarker) -> Vec<Display> {
         .collect()
 }
 
-/// Calls `on_change` with the full current display set on every screen-parameter change and on
-/// every wake from sleep.
-///
-/// Delivery is on the main thread, whichever thread registered, and only while the main thread
-/// is inside its run loop. Dropping the returned [`Watcher`] deregisters both observers.
+/// Call `on_change` with the full current set on every screen-parameter change and every wake.
+/// Delivery is on the main thread. Dropping the [`Watcher`] deregisters both observers.
 #[must_use = "dropping the watcher deregisters the observers; hold it to keep receiving events"]
 pub fn watch<F>(on_change: F) -> Watcher
 where
@@ -106,7 +87,6 @@ where
     }
 }
 
-/// Register one observer on `center` that re-reads the display set and hands it to `on_change`.
 fn observe<F>(
     center: &Retained<NSNotificationCenter>,
     name: &'static NSNotificationName,
@@ -116,8 +96,7 @@ where
     F: Fn(Vec<Display>) + Send + 'static,
 {
     let block = RcBlock::new(move |_notif: NonNull<NSNotification>| {
-        // Delivery is on the main thread; a delivery anywhere else (which Cocoa does not do)
-        // is skipped rather than read from the wrong thread. No panic: this is an FFI frame.
+        // Skip rather than panic: this is an FFI frame.
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
@@ -125,9 +104,8 @@ where
         tracing::debug!(?displays, "display topology reported");
         on_change(displays);
     });
-    // SAFETY: the block is `Send` because `F` is, which is what makes it sound for Foundation
-    // to invoke it on the main thread. `Observation` owns the center, the token, and the block,
-    // and removes the observer before either is dropped.
+    // SAFETY: the block is `Send` because `F` is. `Observation` removes the observer before
+    // either is dropped.
     #[expect(unsafe_code)]
     let token = unsafe {
         center.addObserverForName_object_queue_usingBlock(
@@ -144,26 +122,22 @@ where
     }
 }
 
-/// A live pair of topology observers (screen parameters, wake). Dropping it deregisters both.
+/// Screen-parameter and wake observers. Dropping it deregisters both.
 #[must_use = "dropping the watcher deregisters the observers"]
 pub struct Watcher {
     _screens: Observation,
     _wake: Observation,
 }
 
-/// One registered observer and the center that registered it, held together because
-/// deregistering needs that center.
 struct Observation {
     center: Retained<NSNotificationCenter>,
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
-    /// Held so the callback outlives the observation. The notification center copies the
-    /// block, but the closure it wraps is ours to keep alive.
+    /// The center copies the block; the closure it wraps is ours to keep alive.
     _block: RcBlock<dyn Fn(NonNull<NSNotification>)>,
 }
 
 impl Drop for Observation {
-    /// Deregisters the observer; dropping the token alone would leave the center calling a
-    /// block whose closure is gone.
+    /// Dropping the token alone would leave the center calling a block whose closure is gone.
     fn drop(&mut self) {
         let observer: &AnyObject = (*self.token).as_ref();
         // SAFETY: `token` is what `addObserverForName…` returned and it is still registered,
@@ -173,11 +147,4 @@ impl Drop for Observation {
             self.center.removeObserver(observer);
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    // `displays()` needs the main thread and `cargo test` does not provide it; the observers
-    // need a run loop it never enters. What can be tested here is nothing; the integration is
-    // measured in the consumer.
 }

@@ -1,29 +1,19 @@
-//! Shared syn helpers for the laserbeam and bind derives. They locate a node's
-//! descent edges (the `#[child]` field of a struct, the single-field
-//! payload of an enum variant), unwrap `Box`, and build the child-`Path`
-//! construction that `resolve` and `dispatch` descend through identically.
+//! Shared syn helpers for the laserbeam and bind derives. Child-path construction is shared so `resolve` and `dispatch` descend identically.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Fields, Ident, Index, Member, Path, Type};
 
-/// The two enums a multi-parent edge is told, since the derive can build neither.
-///
-/// `parent` is the route the descent wraps this node into; `up` is its `Above::Up` half, which
-/// the ascent's fold matches to recover which route a leave took. They are declared together
-/// because a route enum without its Up half has no `Above` impl, and the child's path is then
-/// not a type a leave can complete from.
+/// Route enum (`parent`) and its `Above::Up` half (`up`) for a multi-parent child. The derive can build neither; a route without its Up half has no `Above` impl.
 pub struct Route {
     pub parent: Path,
     pub up: Path,
 }
 
-/// A `#[child]` field of a struct: its name, child type, and, when the
-/// child has multiple parents, the route it hangs on.
 pub type Child = (Member, Type, Option<Route>);
 
-/// Finds the `#[child]` fields of a struct, in declaration order.
+/// `#[child]` fields of a struct, in declaration order.
 ///
 /// # Errors
 ///
@@ -43,13 +33,11 @@ pub fn find_children(fields: &Fields) -> syn::Result<Vec<Child>> {
     Ok(found)
 }
 
-/// The route named by `#[child(route = Enum, up = UpEnum)]`, if present. A bare
-/// `#[child]` (or no attribute) is a single-parent child.
+/// Route from `#[child(route = Enum, up = UpEnum)]`. A bare `#[child]` is a single-parent child.
 ///
 /// # Errors
 ///
-/// Errors if the attribute list contains anything other than `parent = ..` and `up = ..`, or
-/// if one of the two is given without the other.
+/// Errors if the attribute list contains anything other than `route = ..` and `up = ..`, or if one of the two is given without the other.
 pub fn parent_route(attrs: &[syn::Attribute]) -> syn::Result<Option<Route>> {
     let Some(attr) = attrs.iter().find(|a| a.path().is_ident("child")) else {
         return Ok(None);
@@ -83,7 +71,7 @@ pub fn parent_route(attrs: &[syn::Attribute]) -> syn::Result<Option<Route>> {
     }
 }
 
-/// The single field type of a tuple variant `Foo(Bar)`.
+/// Field type of a tuple variant `Foo(Bar)`.
 ///
 /// # Errors
 ///
@@ -98,9 +86,7 @@ pub fn single_field_ty(fields: &Fields) -> syn::Result<Type> {
     }
 }
 
-/// If `ty` is `Box<T>`, returns `(T, true)`; otherwise `(ty, false)`. A recursive
-/// field or variant breaks its own size with `Box`, and a projection through it
-/// has to dereference.
+/// `(inner, true)` if `ty` is `Box<T>`, else `(ty, false)`. A recursive field uses `Box`; the projection must dereference.
 #[must_use]
 pub fn unbox(ty: &Type) -> (&Type, bool) {
     if let Type::Path(tp) = ty
@@ -114,8 +100,7 @@ pub fn unbox(ty: &Type) -> (&Type, bool) {
     (ty, false)
 }
 
-/// True when a node is the tree root: it carries `#[node(root)]`, and its path is
-/// `&mut Self` instead of a [`PathMut`](laserbeam::PathMut).
+/// True when the node carries `#[node(root)]`.
 #[must_use]
 pub fn is_root(attrs: &[syn::Attribute]) -> bool {
     for attr in attrs {
@@ -140,12 +125,11 @@ pub fn is_root(attrs: &[syn::Attribute]) -> bool {
     false
 }
 
-/// The parent path named by `#[node(parent_path = P)]`. `None` for `#[node(root)]`, whose path is
-/// `&mut Self`, or when there is no `#[node(..)]` at all.
+/// Parent path from `#[node(parent_path = P)]`. `None` for `#[node(root)]` or a missing `#[node(..)]`.
 ///
 /// # Errors
 ///
-/// Errors if `#[node(..)]` is present without `parent = ..` or `root`.
+/// Errors if `#[node(..)]` is present without `parent_path = ..` or `root`.
 pub fn node_parent(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     for attr in attrs {
         if attr.path().is_ident("node") {
@@ -173,51 +157,34 @@ pub fn node_parent(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     Ok(None)
 }
 
-/// How a child hangs off its parent node, for building the descent projection.
 pub enum Via<'a> {
-    /// A struct `#[child]` field, named (`.field`) or positional (`.0`).
     Field(&'a Member),
-    /// A single-field enum variant `Parent::Variant(Child)`.
     Variant(&'a Ident),
 }
 
-/// One descent edge from a parent node to a child.
-///
-/// Building the child `Path` is shared by `resolve` and `dispatch` so both
-/// descend identically; `dispatch` additionally recovers the parent path on the
-/// way back up.
+/// Descent edge from a parent node to a child. Shared by `resolve` and `dispatch` so both build the same child path.
 pub struct Edge<'a> {
-    /// The parent node's ident, naming `Self::` variants and the route variant.
     pub parent: &'a Ident,
-    /// True when the parent is the root (its path is `&mut Self`).
     pub is_root: bool,
-    /// The route a multi-parent child hangs on; `None` for a single parent.
     pub route: Option<&'a Route>,
-    /// True when the field or variant payload is `Box<Child>`.
     pub boxed: bool,
-    /// How the child is reached on the parent.
     pub via: Via<'a>,
 }
 
 impl Edge<'_> {
-    /// The child `Path` expression, given the parent-path expression `path`.
-    /// `resolve` tail-calls into it and `dispatch` recurses into it, so both
-    /// build the identical path.
-    // The single/multi-parent `match` reads better than the `map_or_else` clippy
-    // wants, given the multi-line `quote!` arms.
+    /// Child `Path` expression from the parent-path expression `path`.
+    // `match` rather than `map_or_else`: the `quote!` arms are multi-line.
     #[expect(clippy::option_if_let_else)]
     #[must_use]
     pub fn child_path(&self, path: &TokenStream2) -> TokenStream2 {
         let deref = if self.boxed { quote!(*) } else { quote!() };
         match self.route {
-            // Single-parent child: its path is `Path<Child, ThisPath>`, exactly
-            // what `from_fn` builds, so `.into()` is identity.
+            // Single-parent: `from_fn` already builds `Path<Child, ThisPath>`, so `.into()` is identity.
             None => {
                 let (project, project_ref) = self.single_parent_projection(&deref);
                 quote!(::laserbeam::PathMut::from_fn(#path, #project, #project_ref).into())
             }
-            // Multi-parent child: wrap this node's path in the route variant named
-            // after this node, and re-derive the child through it.
+            // Wrap this node's path in the route variant named after this node.
             Some(route) => {
                 let parent = self.parent;
                 let route = &route.parent;
@@ -232,10 +199,7 @@ impl Edge<'_> {
         }
     }
 
-    /// The expression recovering this node's path from a child path `child` on the
-    /// way back up (`dispatch` only). A single-parent child's `into_parent` is the
-    /// parent path directly; a multi-parent child's is the route enum, matched
-    /// back to this node's variant.
+    /// Recover this node's path from child path `child`. A routed child's `into_parent` is the route enum, matched back to this node's variant.
     #[expect(clippy::option_if_let_else)]
     #[must_use]
     pub fn recover_parent(&self, child: &TokenStream2) -> TokenStream2 {
@@ -253,10 +217,7 @@ impl Edge<'_> {
         }
     }
 
-    /// The projection closures for a single-parent child, to write the node and to read it.
-    ///
-    /// The two are the same walk in the two mutabilities: a path stores both, because the mutable
-    /// one cannot be applied through a shared borrow.
+    /// Mutable and shared projection closures. A path stores both because the mutable one cannot run through a shared borrow.
     fn single_parent_projection(&self, deref: &TokenStream2) -> (TokenStream2, TokenStream2) {
         match &self.via {
             Via::Field(field) => {
@@ -305,9 +266,7 @@ impl Edge<'_> {
         }
     }
 
-    /// The projection closure for a multi-parent child, reached through the route
-    /// variant `variant`. The route type is total over every parent, but only this
-    /// one is ever live, hence the `unreachable!()`.
+    /// Projection through the live route variant. Other variants of the route are `unreachable!`.
     fn multi_parent_projection(
         &self,
         variant: &TokenStream2,

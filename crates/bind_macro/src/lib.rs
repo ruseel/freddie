@@ -1,14 +1,4 @@
-//! Derive macro for `bind`: implements `AccumulateTriggers<M>` (accumulate) and
-//! `Dispatch<M>` (dispatch).
-//!
-//! `#[derive(Bind)]` reads `#[binds(Marker)]` for the marker and the node's scheduled items,
-//! `#[bind]` / `#[post]` / `#[pre_post]`, in source order. `accumulate` inserts the node's
-//! triggers and recurses into its `#[child]` fields and active enum variant.
-//!
-//! `dispatch` is one linear body at every node: snap each item's trigger and pre, descend into
-//! the active child, fold what the child completed to into this node's state, run every
-//! scheduled item over that state, and complete. The child path is built through the shared
-//! `derive_support::Edge`, so descent matches `resolve`'s.
+//! `#[derive(Bind)]`: implements `Dispatch` and, under `check`, `AccumulateTriggers`.
 
 use derive_support::{
     Edge, Route, Via, find_children, is_root, node_parent, parent_route, single_field_ty, unbox,
@@ -51,9 +41,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let marker = marker_of(input)?;
     let items = scheduled(&input.attrs)?;
 
-    // A DERIVED level is not a place in the tree. It has no `Resolve`, so it can have neither
-    // `Dispatch` nor `AccumulateTriggers`, both of which take `Self::Path`. It implements
-    // `DispatchIntoTreePath` on its `DerivedLevel` instead, ascending at the place beneath it.
+    // Derived levels have no `HasPath`. They implement `DispatchIntoTreePath` on `DerivedLevel` instead.
     if let Some(parent) = derived_node_parent(&input.attrs)? {
         if !input.generics.params.is_empty() {
             return Err(syn::Error::new(
@@ -74,10 +62,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Emits `impl laserbeam::HasPath` for a place node: its path type, `PathMut<Self, Parent>` from
-/// `#[node(parent_path = P)]`, or `&mut Self` for `#[node(root)]`. This is the associated type that
-/// `Dispatch`, `AccumulateTriggers`, and the
-/// place `DispatchIntoParent` impl all name.
+/// `HasPath` for a place node: `PathMut<Self, Parent>` or `&mut Self` at the root.
 fn place_impl(input: &DeriveInput, name: &Ident) -> syn::Result<TokenStream2> {
     let path_ty = if is_root(&input.attrs) {
         quote!(&'a mut Self)
@@ -102,11 +87,7 @@ fn place_impl(input: &DeriveInput, name: &Ident) -> syn::Result<TokenStream2> {
     })
 }
 
-/// The parent path named by `#[derived_node(parent_path = Alias)]`, if this level is not a place.
-///
-/// The derive is on the level's own struct and cannot see its parent, so it has to be told.
-/// With the parent and its own name it can build `DerivedLevel<ParentPath<'a>, Self>` itself, which is
-/// why no node alias is needed.
+/// Parent path from `#[derived_node(parent_path = Alias)]`. The derive cannot see the parent, so the attribute names it.
 fn derived_node_parent(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     let mut found = None;
     for attr in attrs {
@@ -134,11 +115,7 @@ fn derived_node_parent(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     Ok(found)
 }
 
-/// The fns named by `#[derived_children(f, g)]`, listed order, for the children of this node
-/// that are not fields.
-///
-/// Each fn is `fn(&Parent) -> Option<Data>`. A shared reference, so it cannot mutate the tree
-/// and cannot consume the parent.
+/// Fns from `#[derived_children(f, g)]`, listed order. Each is `fn(&Parent) -> Option<Data>`.
 fn derived_children_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<Path>> {
     let mut found: Option<Vec<Path>> = None;
     for attr in attrs {
@@ -165,8 +142,7 @@ fn derived_children_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<Path>> {
     Ok(found.unwrap_or_default())
 }
 
-/// The one derived child a derived level may hang: the level's `data` dies with the dispatch,
-/// so a second sibling would have nothing to recover its parent from.
+/// At most one derived child. The level's `data` dies with the dispatch, so a second sibling would have no parent to recover.
 fn derived_level_child(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     let mut fns = derived_children_fns(attrs)?;
     if fns.len() > 1 {
@@ -178,12 +154,7 @@ fn derived_level_child(attrs: &[syn::Attribute]) -> syn::Result<Option<Path>> {
     Ok(fns.pop())
 }
 
-/// A place node's child edges: its `#[child]` fields, declaration order, and its
-/// `#[derived_children]` fns, listed order.
-///
-/// Rejects what the multi-child body does not emit: a routed or generic child beside siblings
-/// (`multiple-children-generic-routed.md`), and derived children on an enum, whose children
-/// are its variants.
+/// A place node's `#[child]` fields (declaration order) and `#[derived_children]` fns (listed order).
 fn place_child_edges(input: &DeriveInput) -> syn::Result<(Vec<derive_support::Child>, Vec<Path>)> {
     let derived = derived_children_fns(&input.attrs)?;
     let fields = match &input.data {
@@ -217,11 +188,7 @@ fn place_child_edges(input: &DeriveInput) -> syn::Result<(Vec<derive_support::Ch
     Ok((fields, derived))
 }
 
-/// The enum case of [`derived_node_impl`]: one dispatch/accumulate arm per variant, each
-/// rebuilding the node with the variant's `Data` and the shared parent.
-///
-/// Every arm ascends at the same place, so every arm returns the same `Completed` and the
-/// match is total with nothing to fold between them.
+/// One dispatch/accumulate arm per enum variant, each rebuilt with that variant's `Data` and the shared parent.
 fn derived_enum_node_impl(
     input: &DeriveInput,
     name: &Ident,
@@ -240,7 +207,7 @@ fn derived_enum_node_impl(
     let mut acc_arms = Vec::new();
     for v in &e.variants {
         let vi = &v.ident;
-        single_field_ty(&v.fields)?; // one Data per variant
+        single_field_ty(&v.fields)?;
         reject_child(&v.fields)?;
         dispatch_arms.push(quote! {
             #name::#vi(data) => ::bind::DispatchIntoTreePath::<#marker>::dispatch_into_tree_path(
@@ -293,12 +260,7 @@ fn derived_enum_node_impl(
     })
 }
 
-/// Emits `DispatchIntoTreePath` (and the check's half) for a DERIVED level: the same linear body a
-/// place emits, over `node` instead of `path`, ascending at the place beneath it.
-///
-/// It never names its own node type, and it cannot name its place either: a level whose parent
-/// is another derived level knows only that parent's `DerivedLevel` alias. Both are written through the
-/// `HasTreePath` projection, which resolves because `#parent` is concrete at the impl.
+/// `DispatchIntoTreePath` for a derived level. Node and place types go through `HasTreePath` because a parent that is itself derived has no place type the derive can name.
 fn derived_node_impl(
     input: &DeriveInput,
     name: &Ident,
@@ -306,9 +268,6 @@ fn derived_node_impl(
     marker: &Path,
     items: &[Scheduled],
 ) -> syn::Result<TokenStream2> {
-    // Several possible levels: the DATA is an enum. There is no separate mechanism. The derive
-    // destructures per variant and rebuilds the node, so each variant's handler gets its own
-    // `Data` and the parent is shared by construction.
     if let Data::Enum(e) = &input.data {
         return derived_enum_node_impl(input, name, parent, marker, items, e);
     }
@@ -367,16 +326,7 @@ fn derived_node_impl(
     })
 }
 
-/// A `#[derived_children]` edge's state, for dispatch. Emitted on a PLACE and on a DERIVED level
-/// alike, because both reach a child the same way once they hold it.
-///
-/// `f` is `fn(&Parent) -> Option<Data>`: a shared reference, so what it reads decides whether
-/// the level exists at all, before anything is moved. With a level, the descent consumes the
-/// parent and the place comes back inside the child's leave; without one, the parent is still
-/// here and flattens to that same place, which is the identity for a place.
-///
-/// The derive names no type it cannot see: `data`'s type comes from `f`'s return, and inference
-/// resolves `DispatchIntoTreePath` from the `DerivedLevel`.
+/// Dispatch descent for a `#[derived_children]` fn. The fn takes `&Parent` so existence is decided before the parent is moved.
 fn derived_child_state(f: &Path, marker: &Path, place: &TokenStream2) -> TokenStream2 {
     quote! {
         match #f(&#place) {
@@ -395,8 +345,7 @@ fn derived_child_state(f: &Path, marker: &Path, place: &TokenStream2) -> TokenSt
     }
 }
 
-/// A derived level's own `#state`: the edge above when it has a `#[derived_children]`, and the
-/// node flattened to its place when it has nothing below it.
+/// Derived level's post-descent state: the child edge if any, otherwise the node flattened to its place.
 fn derived_state(
     input: &DeriveInput,
     marker: &Path,
@@ -408,8 +357,7 @@ fn derived_state(
     ))
 }
 
-/// A derived level cannot hang a place child: its `data` is rebuilt every dispatch and dies with
-/// it, so a place below it would have to fold through a `DerivedLevel`, which is not a path.
+/// A derived level cannot hang a place child: its `data` dies with the dispatch, so a place below it would have to fold through a `DerivedLevel`, which is not a path.
 fn reject_child(fields: &Fields) -> syn::Result<()> {
     for f in fields {
         if let Some(attr) = f.attrs.iter().find(|a| a.path().is_ident("child")) {
@@ -424,7 +372,7 @@ fn reject_child(fields: &Fields) -> syn::Result<()> {
     Ok(())
 }
 
-/// The same descent, for the check.
+/// Accumulate descent for a `#[derived_children]` fn.
 fn derived_child_accumulate(f: &Path, marker: &Path, place: &TokenStream2) -> TokenStream2 {
     quote! {
         let #place = match #f(&#place) {
@@ -446,16 +394,7 @@ fn derived_accumulate_descent(input: &DeriveInput, marker: &Path) -> syn::Result
     ))
 }
 
-/// Emits `impl AccumulateTriggers<M>`: insert this node's triggers, then recurse.
-///
-/// It takes a path, exactly as `dispatch` does, and for the same reason: a level whose child
-/// is produced by a function needs a path to call that function with. The two bodies descend
-/// through the same `derive_support::Edge`, so they cannot drift.
-///
-/// A node with several children is not walked: its impl is `Err(BindError::MultiChildNode)`,
-/// so check builds compile everywhere and the check errors at the call for any tree containing
-/// a branch point. The check's eventual rework accumulates into a `Vec`, where a duplicate is
-/// legal because claim order is the semantics.
+/// `AccumulateTriggers` impl. A node with several children returns `Err(BindError::MultiChildNode)`.
 fn accumulate_impl(
     input: &DeriveInput,
     name: &Ident,
@@ -527,11 +466,7 @@ fn accumulate_impl(
     })
 }
 
-/// The accumulate recursion, the child types to bound, and whether the path binding needs
-/// `mut`. Mirrors `dispatch_body`, minus early return: accumulate never stops early.
-///
-/// Called only for a node with at most one child edge; a branch point's impl is the
-/// `MultiChildNode` error and never reaches here.
+/// Recursion, child types to bound, and whether `path` needs `mut`. Only for a node with at most one child edge.
 fn accumulate_body(
     input: &DeriveInput,
     name: &Ident,
@@ -612,8 +547,6 @@ fn accumulate_body(
     }
 }
 
-/// Emits `impl Dispatch<M>`: descend into each child, then run this node's scheduled
-/// items over what the descents left of its path.
 fn dispatch_impl(
     input: &DeriveInput,
     name: &Ident,
@@ -654,10 +587,7 @@ fn dispatch_impl(
     })
 }
 
-/// The where clause bounding each child by `bound`, plus, for a child whose type names one of
-/// the node's type parameters, the path equality that lets the generated body treat the child's
-/// opaque path as the `PathMut` it builds. Any correctly parented node satisfies the equality
-/// definitionally, because the child's own derive emitted exactly that `Path`.
+/// Child trait bounds. A child type that names a type parameter also gets a `Path` equality so the generated `PathMut` is the child's `HasPath::Path`.
 fn child_where_clause(
     input: &DeriveInput,
     children: &[Type],
@@ -685,8 +615,7 @@ fn child_where_clause(
     quote!(where #(#preds)*)
 }
 
-/// A routed (multi-parent) child edge stays concrete: the route recover names the parent
-/// variant, which has no generic story yet.
+/// Routed children cannot be generic: recover names a parent variant.
 fn reject_routed_generic(
     input: &DeriveInput,
     child: &Type,
@@ -702,7 +631,6 @@ fn reject_routed_generic(
     Ok(())
 }
 
-/// Whether `ty`'s tokens name any of `params`.
 fn mentions_param(ty: &Type, params: &[&Ident]) -> bool {
     fn walk(ts: TokenStream2, params: &[&Ident], hit: &mut bool) {
         for tt in ts {
@@ -722,8 +650,7 @@ fn mentions_param(ty: &Type, params: &[&Ident]) -> bool {
     hit
 }
 
-/// The state binding: `mut` only when a child block or a scheduled item will rebind it, so a
-/// leaf with nothing scheduled does not carry a needless `mut`.
+/// `mut state` only when a child block or scheduled item rebinds it.
 fn state_binding(items: &[Scheduled], has_child_blocks: bool) -> TokenStream2 {
     if items.is_empty() && !has_child_blocks {
         quote!(state)
@@ -732,12 +659,7 @@ fn state_binding(items: &[Scheduled], has_child_blocks: bool) -> TokenStream2 {
     }
 }
 
-/// This node's state: the standing init (or the active enum variant's fold), one `descend`
-/// block per remaining child edge — `#[child]` fields in declaration order, then
-/// `#[derived_children]` fns in listed order — and the child types to bound.
-///
-/// One body shape at every arity: a leaf is the init with zero blocks, and each block lends
-/// the path to its child if it can still be built, preserving the join (`MaybeInvalidated::descend`).
+/// Init, then one `descend` block per child: `#[child]` fields in declaration order, then `#[derived_children]` fns in listed order.
 fn dispatch_state(
     input: &DeriveInput,
     name: &Ident,
@@ -786,9 +708,7 @@ fn dispatch_state(
                 let state = child_state(&edge, child, marker, place);
                 arms.push(quote!(Self::#vi(_) => { #state }));
             }
-            // The root enum matches `&mut Self` directly; a non-root enum reaches its variant
-            // through the path. A SHARED read: the arms bind nothing, the discriminant is all
-            // this asks for, and the arm then consumes the path to build the child's.
+            // Root matches `&mut Self`; a non-root matches `path.get()`. Shared, because the arm only needs the discriminant, then consumes the path.
             let scrutinee = if root {
                 quote!(#place)
             } else {
@@ -803,9 +723,7 @@ fn dispatch_state(
             ));
         }
     };
-    // A derived child is not a field, so `f` produces its data and the derive builds the
-    // node. Nothing here names the child's type, and nothing can: the derive has only `f`'s
-    // name.
+    // Derived children are fns, not fields. The derive has only `f`'s name, not the child's type.
     for f in &derived {
         let fold = derived_child_state(f, marker, place);
         blocks.push(quote! {
@@ -815,12 +733,7 @@ fn dispatch_state(
     Ok((init, blocks, children))
 }
 
-/// One place edge's state: dispatch the child, unwrap its leave, and read it at this node.
-///
-/// A single-parent edge reads it through laserbeam's `Stop` conversions, whose two impls are
-/// the root and non-root cases. A route edge cannot: its `Up` payload is the consumer's enum,
-/// so the fold matches out the variant this descent constructed. The `unreachable!()`s assert
-/// what the multi-parent projections already assert, that only the live route is ever built.
+/// Dispatch a place child and fold its leave. A routed child's `Up` is the consumer's enum, so the fold matches the live variant; `unreachable!` is the other routes.
 fn child_state(edge: &Edge<'_>, child: &Type, marker: &Path, place: &TokenStream2) -> TokenStream2 {
     let child_path = edge.child_path(place);
     let leave = quote! {
@@ -848,7 +761,6 @@ fn child_state(edge: &Edge<'_>, child: &Type, marker: &Path, place: &TokenStream
     }
 }
 
-/// The marker named by the one required `#[binds(Marker)]`.
 fn marker_of(input: &DeriveInput) -> syn::Result<Path> {
     let mut found = None;
     for attr in &input.attrs {
@@ -862,20 +774,7 @@ fn marker_of(input: &DeriveInput) -> syn::Result<Path> {
     found.ok_or_else(|| syn::Error::new(input.span(), "missing `#[binds(Marker)]`"))
 }
 
-/// The expression that produces a binding's trigger, given what dispatch is holding for this node.
-///
-/// A closure is CALLED with it, so a trigger can depend on the state it is bound on; anything else
-/// is evaluated as the value it is. The distinction is syntactic because a trait cannot make it:
-/// blanket impls for values and for closures overlap, and rustc cannot prove no type is both an
-/// `EventTrigger` and an `Fn`.
-///
-/// A closure goes through [`bind::call_with`](::bind::call_with) rather than being called here: a
-/// closure parameter takes its type from an expected type, not from an immediate call, and that
-/// function's signature is what supplies one. Calling it directly would make every state-reading
-/// binding annotate its own parameter with a path type it should not have to name.
-///
-/// It is handed a SHARED reference to what dispatch is holding, so a trigger reads the node it is
-/// bound on, and its parent, and cannot write either.
+/// Trigger expression. Closures go through `call_with` so the parameter infers. The distinction is syntactic because a trait cannot separate values from closures. Shared borrow so the trigger cannot write the node.
 fn trigger_expr(trigger: &Expr, state: &TokenStream2) -> TokenStream2 {
     if matches!(trigger, Expr::Closure(_)) {
         quote!(::bind::call_with(&#state, #trigger))
@@ -884,15 +783,7 @@ fn trigger_expr(trigger: &Expr, state: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// The triggers THE CHECK collects: the ones a node CLAIMS.
-///
-/// Only a `#[bind]` claims, so only a `#[bind]`'s trigger is a claim to collide over. A post is
-/// scheduled by its trigger and runs beside whatever claimed, which is not a clobber.
-///
-/// A closure trigger is skipped. Its value is read from state at dispatch, so it is not a static
-/// claim, and two nodes whose state holds nothing would produce the same value and read as a
-/// clobber while neither could fire at all. It is also what lets a trigger be an `Option`:
-/// `insert_or_error` takes a value, `None` has none to give, and the conversion is never reached.
+/// Triggers the check collects: `#[bind]` only, and not closures. A closure is read from state at dispatch, so it is not a static claim.
 fn claimed_triggers(items: &[Scheduled]) -> impl Iterator<Item = &Expr> {
     items
         .iter()
@@ -900,19 +791,11 @@ fn claimed_triggers(items: &[Scheduled]) -> impl Iterator<Item = &Expr> {
         .map(|it| &it.trigger)
 }
 
-/// The local a scheduled item's opt lands in, numbered in source order across the node's
-/// attributes.
 fn opt_ident(i: usize) -> Ident {
     format_ident!("opt_{i}")
 }
 
-/// One scheduled item's opt, snapped BEFORE the descent: the trigger is read off the state as it
-/// stands on the way down, and so is whatever the pre takes from it, while the child the descent
-/// is about to run in is still there.
-///
-/// The pre is called rather than inlined even when it is the synthesized `|_, _| ()`, so one
-/// emitted shape serves every kind of scheduled item and the `Snap` a handler receives is
-/// whatever the pre returned.
+/// Snap this item's trigger and pre before descent, while the child is still there. The pre is always called, including the synthesized `|_, _| ()`, so every item has the same shape.
 fn opt(i: usize, item: &Scheduled, state: &TokenStream2) -> TokenStream2 {
     let ident = opt_ident(i);
     let trigger = trigger_expr(&item.trigger, state);
@@ -932,11 +815,7 @@ fn opt(i: usize, item: &Scheduled, state: &TokenStream2) -> TokenStream2 {
     }
 }
 
-/// One scheduled item's block, the same for every kind: call it with what its opt snapped and
-/// the state as it stands, take its effects, and re-derive the state from the leave it returned.
-///
-/// Nothing here branches on the claim or on the state. The item was scheduled by its trigger and
-/// runs; what each state branch means is its own business.
+/// Run the item if its opt matched. Does not branch on claim or invalidation; the handler does.
 fn scheduled_block(i: usize, item: &Scheduled) -> TokenStream2 {
     let ident = opt_ident(i);
     let rhs = item.rhs();
@@ -953,29 +832,22 @@ fn scheduled_block(i: usize, item: &Scheduled) -> TokenStream2 {
     }
 }
 
-/// The pre a `#[bind]` or a `#[post]` gets: it takes nothing off the state, so the `Snap` its
-/// handler is handed is `()`.
+/// Pre for `#[bind]` and `#[post]`: snap is `()`.
 fn unit_pre() -> Expr {
     syn::parse_quote!(|_, _| ())
 }
 
-/// One item on a node's schedule: what fires it, what it snaps before the descent, what runs on
-/// the way up, and whether it claims.
-///
-/// The three attribute kinds differ only here, at parse time. Past this point one list drives
-/// one emitted shape.
+/// One scheduled item. The three attribute kinds collapse to this; the emit is the same after parse.
 struct Scheduled {
     trigger: Expr,
-    /// What runs before the descent and produces the handler's `Snap`.
     pre: Expr,
     handler: Expr,
-    /// `#[bind]`, and nothing else: only a bind takes the claim.
+    /// True for `#[bind]`. Only a bind takes the claim.
     claims: bool,
 }
 
 impl Scheduled {
-    /// What dispatch calls. A bind goes through the claim gate; a post is called as written.
-    /// Either way the macro looks inside no rhs.
+    /// Bind wraps in `exclusive`; a post is the handler as written. The macro does not look inside the rhs.
     fn rhs(&self) -> TokenStream2 {
         let handler = &self.handler;
         if self.claims {
@@ -986,7 +858,6 @@ impl Scheduled {
     }
 }
 
-/// One `trigger => handler` pair, the form `#[bind]` and `#[post]` share.
 struct Pair {
     trigger: Expr,
     handler: Expr,
@@ -1001,7 +872,6 @@ impl syn::parse::Parse for Pair {
     }
 }
 
-/// One `trigger => (pre, post)` pair from `#[pre_post(..)]`.
 struct PrePost {
     trigger: Expr,
     pre: Expr,
@@ -1021,13 +891,7 @@ impl syn::parse::Parse for PrePost {
     }
 }
 
-/// Every scheduled item across the node's `#[bind]`, `#[post]`, and `#[pre_post]` attributes,
-/// in source order: the attributes are walked once, in the order they were written, and each
-/// contributes its comma-separated pairs in the order they appear inside it.
-///
-/// The order is what a node's schedule means, since each item sees the state the item before it
-/// left. A post keyed on what the descent did is written above the binds for exactly that
-/// reason.
+/// Scheduled items in source order. Each item sees the state the previous one left.
 fn scheduled(attrs: &[syn::Attribute]) -> syn::Result<Vec<Scheduled>> {
     let mut out = Vec::new();
     for attr in attrs {

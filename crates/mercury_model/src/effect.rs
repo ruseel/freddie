@@ -1,4 +1,4 @@
-//! What a handler asks the consumer to do, and the window placement it can request.
+//! What a handler asks the consumer to do.
 
 use freddie::TimerEffect;
 use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, PressType};
@@ -6,11 +6,7 @@ use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, PressType};
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::{Pid, Placement, WindowId};
 
-/// One key carrying its modifiers as flags, which is how Mercury writes a chord.
-///
-/// `cmd`-`r` is `Chord { key: KeyR, flags: COMMAND }`: one key event with the modifier as a flag,
-/// not a synthetic `cmd` down and up around it. A synthetic modifier event would strand the
-/// modifier the user is really holding, because the app counts the extra up and thinks it released.
+/// One key with modifiers as flags. A synthetic modifier down/up would strand a modifier the user is really holding.
 #[cfg_attr(feature = "testing", derive(PartialEq, Eq))]
 #[derive(Clone, Copy, Debug)]
 pub struct Chord {
@@ -27,59 +23,36 @@ pub enum UrlPart {
     Host,
 }
 
-/// What a handler asks the consumer to do. Inert data; performing it is the consumer's job,
-/// and it never mutates Mercury's state directly.
-// Effect equality is only ever asked for by the tests (dispatch never compares effects), so the
-// derive is gated behind `testing` and kept out of the normal build. `PartialEq` but not `Eq`,
-// because a window event in one carries `f64` frames.
+// Equality is only asked for by tests, so the derive is gated. `PartialEq` but not `Eq`: a window event carries `f64` frames.
 #[cfg_attr(feature = "testing", derive(PartialEq))]
 #[derive(Debug)]
 pub enum MercuryEffect {
     Foreground(super::App),
-    /// Tap one key with modifiers baked into both halves.
     Tap(Chord),
-    /// Emit one raw key event, a press or a release on its own.
-    ///
-    /// The escape hatch, for the one case that is genuinely a lone half of a keypress: passing
-    /// a key through, where the model sees a down and an up as separate events and re-emits
-    /// each. Building a chord out of these is a bug waiting to happen; use [`Tap`](Self::Tap).
+    /// One press or release. For passthrough, where down and up arrive as separate events. A chord is [`Tap`](Self::Tap).
     Emit(KeyEvent),
-    /// Move and resize one window, named by id, to a rectangle already worked out.
-    ///
-    /// The sink does not ask what is frontmost, what is focused, or what the screen looks
-    /// like. The handler that produced this read all of it out of the model.
     SetFrame(Placement),
-    /// Read `window`'s frame off the effect loop; the answer returns as a
-    /// [`FrameRead`](crate::FrameRead) carrying this half.
+    /// Read `window`'s frame; the answer returns as a [`FrameRead`](crate::FrameRead) carrying this half.
     ReadFrame {
         window: WindowId,
         generation: RidingGeneration,
     },
-    /// Read `pid`'s focused window; the answer returns as a
-    /// [`FocusRead`](crate::FocusRead) carrying this half.
+    /// Read `pid`'s focused window; the answer returns as a [`FocusRead`](crate::FocusRead) carrying this half.
     ReadFocus {
         pid: Pid,
         generation: RidingGeneration,
     },
-    /// Put text on the clipboard, replacing what is there.
     Copy(String),
-    /// Quit the program. The effect handler performs this by exiting.
     Kill,
-    /// Put the overlay up, showing `text`. Replaces whatever it was showing.
     ShowOverlay(&'static str),
-    /// Take the overlay down. A no-op if nothing is up.
     HideOverlay,
-    /// Show this layer's name in the menu bar. Produced only by `set_layer`, so the item and the
-    /// model cannot disagree about which layer is active.
+    /// Menu-bar layer name. Produced only by `set_layer`, so the item and the model cannot disagree.
     ShowLayer(&'static str),
-    /// Arm a timer. The effect loop schedules it; it fires its event after the delay unless the
-    /// guard held by the state that asked for it drops first.
+    /// Arm a timer. It fires after the delay unless the guard the state kept drops first.
     Timer(TimerEffect),
 }
 
-/// One effect iterates as itself, so a handler with a single thing to ask for returns it bare
-/// and dispatch collects it. `Bindings::Output` stays the vector, since a handler that asks for
-/// several is the other half of the same trait.
+/// So a handler can return one effect or a vec; dispatch collects either.
 impl IntoIterator for MercuryEffect {
     type Item = Self;
     type IntoIter = std::iter::Once<Self>;
@@ -93,14 +66,11 @@ pub(crate) const fn tap(key: Key, flags: ModifierFlags) -> MercuryEffect {
     MercuryEffect::Tap(Chord { key, flags })
 }
 
-/// Emit one key event carrying `flags`. The building block for passing a key through and for the
-/// modifier synchronization sweeps.
 pub(crate) const fn emit(key: Key, press: PressType, flags: ModifierFlags) -> MercuryEffect {
     MercuryEffect::Emit(KeyEvent { key, press, flags })
 }
 
-/// The effects that replay what a key sequence swallowed. Every key a run takes arrived with no
-/// modifier, so every one of them goes back out bare.
+/// Replay swallowed presses. They arrived with no modifier, so they go back out bare.
 pub(crate) fn replay(presses: Vec<KeyPress>) -> Vec<MercuryEffect> {
     presses
         .into_iter()

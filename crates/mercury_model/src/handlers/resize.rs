@@ -1,9 +1,4 @@
-//! Resize-layer units: place the focused window.
-//!
-//! Placing is the whole of each unit; returning home is `go_home` composing after it at the bind
-//! site, because placing a window is a choice rather than something you repeat. Each writes
-//! `windows`, which lives on the root, so each ends there, and the `go_home` after it ends there
-//! too: two root-enders compose, since the state-level `into_ancestor` is total on both branches.
+//! Place the focused window, then go home.
 
 use freddie_windows_types::{Frame, Pid, Placement};
 use laserbeam::{Completed, CompletesTo, HasStop, IntoAncestor};
@@ -11,12 +6,10 @@ use laserbeam::{Completed, CompletesTo, HasStop, IntoAncestor};
 use crate::MercuryEffect;
 use crate::state::{HomeLayer, Mercury, MercuryPath, Windows};
 
-/// The whole visible frame.
 const fn maximized(visible: Frame) -> Frame {
     visible
 }
 
-/// The left half, full height.
 const fn left_of(visible: Frame) -> Frame {
     Frame {
         width: visible.width / 2.0,
@@ -24,7 +17,7 @@ const fn left_of(visible: Frame) -> Frame {
     }
 }
 
-/// The right half, full height. Abuts [`left_of`] exactly.
+/// Right half, full height. Abuts [`left_of`] exactly.
 const fn right_of(visible: Frame) -> Frame {
     Frame {
         x: visible.x + visible.width / 2.0,
@@ -66,11 +59,7 @@ where
     (effects, root.complete())
 }
 
-/// Put the front app's focused window in the frame `within` picks out of its screen's visible
-/// frame.
-///
-/// The effects are empty when no app is confirmed, either sync is pending, or no screen has
-/// been reported — the same "not now" every pending value answers with.
+/// Place the focused window. Empty if no confirmed app, a pending sync, or no screen.
 fn place(root: &mut Mercury, within: impl Fn(Frame) -> Frame) -> Vec<MercuryEffect> {
     let Some(front) = root.foreground.as_ref().map(|front| front.pid) else {
         return Vec::new();
@@ -79,7 +68,7 @@ fn place(root: &mut Mercury, within: impl Fn(Frame) -> Frame) -> Vec<MercuryEffe
         .map_or_else(Vec::new, |placement| root.windows.placing(placement))
 }
 
-/// Put the focused window back where it was before it was placed, and return home.
+/// Restore the focused window and go home.
 pub(crate) fn restore<'a, E, P>(_ev: &E, _snap: (), p: P) -> (Vec<MercuryEffect>, Completed<P>)
 where
     P: HasStop + IntoAncestor<MercuryPath<'a>>,
@@ -95,7 +84,6 @@ where
     (effects, root.complete())
 }
 
-/// The front app's focused window, where it is, and where it is going.
 fn target(windows: &Windows, front: Pid, within: impl Fn(Frame) -> Frame) -> Option<Placement> {
     let (window, from) = windows.focused(front)?;
     let monitor = windows.monitor_for(from)?;
@@ -107,8 +95,7 @@ fn target(windows: &Windows, front: Pid, within: impl Fn(Frame) -> Frame) -> Opt
 }
 
 #[cfg(test)]
-// The frames here are halves of integers, exactly representable, so the placements are
-// exact and comparing them exactly is the point.
+// Halves of integers, exactly representable; exact comparison is the point.
 #[expect(clippy::float_cmp)]
 mod tests {
     use super::{Frame, left_of, maximized, right_of};
@@ -140,7 +127,6 @@ mod tests {
         assert_eq!(right.height, SCREEN.height);
     }
 
-    /// The halves meet exactly, leaving no gap and no overlap.
     #[test]
     fn the_halves_abut() {
         let left = left_of(SCREEN);
@@ -148,7 +134,6 @@ mod tests {
         assert_eq!(left.x + left.width, right.x);
     }
 
-    /// An offset screen (a second display, or a dock on the left) is respected.
     #[test]
     fn placements_are_relative_to_the_visible_frame() {
         let offset = Frame {

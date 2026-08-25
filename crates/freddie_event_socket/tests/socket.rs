@@ -1,7 +1,4 @@
-//! The socket against a real client.
-//!
-//! Every test binds port 0 and reads back what the OS assigned, so concurrent test binaries never
-//! collide and none of them can take the port a running mercury is using.
+//! The socket against a real client. Every test binds port 0 so concurrent binaries never collide.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,11 +7,9 @@ use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-/// Long enough for a frame to cross loopback and reach the callback. The tests assert on what has
-/// arrived by then, so this trades a few milliseconds for not needing a channel in every one.
+/// Long enough for a frame to cross loopback and reach the callback.
 const SETTLE: Duration = Duration::from_millis(250);
 
-/// A callback that records what it was handed, and the handle to read it back.
 fn collector() -> (
     Arc<Mutex<Vec<String>>>,
     impl Fn(&str) + Send + Sync + 'static,
@@ -35,7 +30,6 @@ fn seen(recorded: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
         .clone()
 }
 
-/// A listener on an OS-assigned port, and the URL to reach it.
 fn listen_anywhere<F>(on_message: F) -> (freddie_event_socket::EventSocket, u16, String)
 where
     F: Fn(&str) + Send + 'static,
@@ -71,7 +65,6 @@ async fn a_text_frame_arrives_intact() {
     let (_socket, _port, url) = listen_anywhere(on_message);
 
     let mut ws = connect(&url).await;
-    // Multibyte, because the frame crosses as bytes and `as_str` has to put it back together.
     ws.send(Message::Text("héllo ✓ мир".into()))
         .await
         .expect("sending");
@@ -101,7 +94,6 @@ async fn two_connections_both_deliver() {
     arrived.sort();
     assert_eq!(arrived, vec!["from first", "from second"]);
 
-    // One going away leaves the other delivering.
     drop(first);
     second
         .send(Message::Text("still here".into()))
@@ -116,11 +108,7 @@ async fn a_web_page_is_refused_and_delivers_nothing() {
     let (recorded, on_message) = collector();
     let (_socket, _port, url) = listen_anywhere(on_message);
 
-    for origin in [
-        "https://evil.com",
-        // A page served from loopback is still a page.
-        "http://localhost:3000",
-    ] {
+    for origin in ["https://evil.com", "http://localhost:3000"] {
         let refused = connect_with_origin(&url, origin)
             .await
             .expect_err("refused");
@@ -201,14 +189,12 @@ async fn dropping_the_socket_closes_clients_and_frees_the_port() {
     drop(socket);
     tokio::time::sleep(SETTLE).await;
 
-    // The client's stream ends rather than hanging.
     let ended = tokio::time::timeout(SETTLE, futures_util::StreamExt::next(&mut ws)).await;
     assert!(
         matches!(ended, Ok(None | Some(Ok(Message::Close(_))))),
         "the client saw it close: {ended:?}"
     );
 
-    // And the port is free immediately, with no lingering listener holding it.
     let (again, on_message) = collector();
     let socket = freddie_event_socket::listen(port, on_message).expect("rebinding the same port");
     let mut ws = connect(&url).await;

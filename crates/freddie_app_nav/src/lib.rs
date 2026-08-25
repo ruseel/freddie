@@ -1,34 +1,8 @@
-//! App navigation for freddie: bring an app to the front, and watch which app is
-//! frontmost.
+//! Bring an app to the front, and watch which app is frontmost, by bundle identifier.
 //!
-//! Both directions speak bundle identifiers (`com.google.Chrome`), which are the
-//! stable name for an app. Display names are not: System Events calls Ghostty
-//! `ghostty` while the app calls itself `Ghostty`.
-//!
-//! - [`foreground`] is the sink: it asks the OS to bring an app to the front,
-//!   launching it if needed. Fire-and-forget; it does not report back.
-//! - [`watch`] is the source. It observes `NSWorkspace`'s
-//!   `didActivateApplication` notification, so the callback runs once per real
-//!   activation. No polling and no interval.
-//!
-//! The two are decoupled on purpose (see `refactors/past/event-loop.md`):
-//! [`foreground`] asks for a change, [`watch`] reports the change that actually
-//! happened, and nothing ties one call to the other. The bundle-id-to-app mapping
-//! belongs to the consumer (which owns its `App` enum), so this crate only ever
-//! hands up a string.
-//!
-//! # The main thread
-//!
-//! `NSWorkspace` registers its notification port with the main thread's run loop
-//! and gives no handle to redirect it, so a callback only ever runs while the main
-//! thread is inside that loop. `freddie_main_loop` is how you get there, and the
-//! binary is what calls it. This crate registers a source and nothing else.
-//!
-//! Registering from any thread is fine. Delivery is always on main, and
-//! main-thread callbacks are serialized, so `on_change` must do its work
-//! elsewhere and return.
-//!
-//! macOS only.
+//! [`foreground`] asks the OS. [`watch`] reports `NSWorkspace`'s
+//! `didActivateApplication` notification. Delivery is on the main thread;
+//! `on_change` must hand its work elsewhere and return. macOS only.
 
 use std::fmt;
 use std::process::Command;
@@ -74,17 +48,13 @@ impl std::error::Error for NavError {
     }
 }
 
-/// Brings the app with this bundle identifier to the front, launching it if it is
-/// not running.
-///
-/// Fire-and-forget: it asks the OS and returns. It does not confirm the app came
-/// up; [`watch`] reports the real frontmost app, so the consumer never has to
-/// trust that this succeeded.
+/// Bring the app with this bundle identifier to the front, launching it if needed.
+/// Does not confirm the app came up; [`watch`] reports the real frontmost app.
 ///
 /// # Errors
 ///
-/// Returns [`NavError::Spawn`] if `open` cannot be spawned, or [`NavError::Failed`]
-/// if `open` exits non-zero (unknown bundle id, activation refused).
+/// [`NavError::Spawn`] if `open` cannot be spawned, [`NavError::Failed`] if it
+/// exits non-zero.
 pub fn foreground(bundle_id: &str) -> Result<(), NavError> {
     let status = Command::new("open")
         .args(open_args(bundle_id))
@@ -97,17 +67,12 @@ pub fn foreground(bundle_id: &str) -> Result<(), NavError> {
     }
 }
 
-/// The `open` arguments that foreground `bundle_id`: `open -b <bundle_id>`, which
-/// launches the app if needed and brings it to the front.
 const fn open_args(bundle_id: &str) -> [&str; 2] {
     ["-b", bundle_id]
 }
 
-/// The bundle identifier of the frontmost app, or `None` if there is none.
-///
-/// Good for seeding the initial state, and for nothing else. It reads a cache that
-/// the workspace notification machinery refreshes, so polling it in a loop returns
-/// the app that was frontmost at process start, forever. Use [`watch`] for changes.
+/// The frontmost app, or `None`. For seeding. Polling this returns the app that
+/// was frontmost at process start; use [`watch`] for changes.
 #[must_use]
 pub fn frontmost() -> Option<FrontmostApp> {
     let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
@@ -117,18 +82,13 @@ pub fn frontmost() -> Option<FrontmostApp> {
     })
 }
 
-/// The frontmost app as macOS reports it.
-///
-/// The bundle identifier is what apps are addressed by; the pid is what the OS's per-app
-/// reports speak. An app with no bundle identifier is not reported, as before pids were
-/// carried.
+/// The frontmost app as macOS reports it. An app with no bundle identifier is not reported.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrontmostApp {
     pub bundle_id: String,
     pub pid: Pid,
 }
 
-/// The app a `didActivateApplication` notification is about.
 fn activated_app(notif: &NSNotification) -> Option<FrontmostApp> {
     let info = notif.userInfo()?;
     // SAFETY: `NSWorkspaceApplicationKey` is an immutable extern static `NSString`
@@ -145,20 +105,8 @@ fn activated_app(notif: &NSNotification) -> Option<FrontmostApp> {
     })
 }
 
-/// Calls `on_change` with the bundle identifier of each app as it becomes
-/// frontmost.
-///
-/// One call per real activation: `NSWorkspace` posts the notification only when the
-/// front app actually changes, so there is nothing to diff and no interval to tune.
-///
-/// This reports changes, not the state at registration. Seed the current app with
-/// [`frontmost`].
-///
-/// The callback runs on the main thread, whichever thread registered it, and only
-/// while the main thread is inside its run loop.
-///
-/// Dropping the returned [`Watcher`] deregisters the observer. Leaking it instead
-/// leaves the callback live and callable after whatever it captured is gone.
+/// Call `on_change` for each app as it becomes frontmost. Seed with [`frontmost`].
+/// The callback runs on the main thread. Dropping the [`Watcher`] deregisters.
 #[must_use = "dropping the watcher deregisters the observer; hold it to keep receiving events"]
 pub fn watch<F>(on_change: F) -> Watcher
 where
@@ -175,10 +123,8 @@ where
         }
     });
 
-    // SAFETY: `NSWorkspaceDidActivateApplicationNotification` is an immutable
-    // extern static. The block is `Send` because `F` is, which is what makes it
-    // sound for Foundation to invoke it on the main thread. `Watcher` owns both the
-    // token and the block, and removes the observer before either is dropped.
+    // SAFETY: the notification name is an immutable extern static. The block is
+    // `Send` because `F` is. `Watcher` removes the observer before either is dropped.
     #[expect(unsafe_code)]
     let token = unsafe {
         NSWorkspace::sharedWorkspace()
@@ -201,21 +147,13 @@ where
 #[must_use = "dropping the watcher deregisters the observer"]
 pub struct Watcher {
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
-    /// Held so the callback outlives the observation. The notification center
-    /// copies the block, but the closure it wraps is ours to keep alive.
+    /// The center copies the block; the closure it wraps is ours to keep alive.
     _block: RcBlock<dyn Fn(NonNull<NSNotification>)>,
 }
 
 impl Drop for Watcher {
-    /// Deregisters the observer. This is the only way to stop one.
-    ///
-    /// Dropping the token alone does not stop the observation: the notification
-    /// center goes on calling the block, which is a use-after-free once the closure
-    /// is gone. `removeObserver` is what stops it, and Cocoa requires it before the
-    /// observer is deallocated.
-    ///
-    /// Measured to work off the main thread, which is where this runs: the
-    /// `Watcher` lives on the thread that registered it.
+    /// `removeObserver` is required: dropping the token alone leaves the center
+    /// calling the block after the closure is gone.
     fn drop(&mut self) {
         let observer: &AnyObject = (*self.token).as_ref();
         // SAFETY: `token` is what `addObserverForName...` returned and it is still
@@ -239,9 +177,6 @@ mod tests {
         assert_eq!(open_args("dev.zed.Zed"), ["-b", "dev.zed.Zed"]);
     }
 
-    /// `frontmost` reads a real `NSWorkspace`, so it runs under `cargo test` and
-    /// reports whatever is frontmost. It must not panic, and what it returns must
-    /// look like a bundle id.
     #[test]
     fn frontmost_is_a_bundle_id_or_nothing() {
         if let Some(front) = frontmost() {
@@ -253,8 +188,4 @@ mod tests {
             );
         }
     }
-
-    // The observer cannot be tested here: `cargo test` never puts the main thread
-    // in a run loop, so nothing is ever delivered. What was measured out of process
-    // is recorded in `refactors/past/foreground-events.md`.
 }

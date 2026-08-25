@@ -1,15 +1,12 @@
-//! [`bind::self_trigger!`] implements [`EventTrigger`] with `Event = Self` and match by
-//! [`PartialEq`]. Unit signals always match; multi-variant tags only match their own variant.
+//! [`bind::self_trigger!`]: `Event = Self`, match by [`PartialEq`].
 
 use bind::EventTrigger;
 
-/// Unit signal: one value, so equality is always true (mercury `Quit`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Quit;
 
 bind::self_trigger!(Quit);
 
-/// Tag enum: variants discriminate (figaro `DeviceClass`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Class {
     A,
@@ -33,7 +30,6 @@ fn tag_enum_matches_only_its_own_variant() {
 
 #[test]
 fn event_type_is_self() {
-    // Compiles only if Event = Self for both shapes.
     fn assert_event_is_self<T: EventTrigger<Event = T>>() {}
     assert_event_is_self::<Quit>();
     assert_event_is_self::<Class>();

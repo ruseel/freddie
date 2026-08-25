@@ -1,5 +1,4 @@
-// A derived level's `data` is rebuilt every dispatch and dies with it, so it cannot hang a place
-// child: that child's leave would have to fold through a `DerivedLevel`, which is not a path.
+// A derived level's `data` dies with the dispatch, so it cannot hang a place child: that child's leave would have to fold through a `DerivedLevel`, which is not a path.
 use bind::{Bind, Bindings, EventTrigger};
 use laserbeam::PathMut;
 

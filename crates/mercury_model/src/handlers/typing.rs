@@ -1,4 +1,4 @@
-//! Typing's catch-all: the `jk` run, and every key it does not take passed through to the app.
+//! Typing's catch-all: the `jk` run, and every other key passed through.
 
 use freddie::{KeySequenceOutcome, TimerFired};
 use freddie_keys::KeyEvent;
@@ -8,20 +8,13 @@ use crate::MercuryEffect;
 use crate::effect::{emit, replay};
 use crate::state::{HomeLayer, MercuryPath, TypingLayerPath, arm_jk_timeout};
 
-/// Any key in typing, which binds nothing else: it goes to the `jk` run first, which either takes
-/// it, hands back what it had swallowed for a key that broke it, or completes and leaves for
-/// home. A key the run does not want is passed through carrying exactly the flags it arrived
-/// with, so a baked-on modifier (an injected `cmd`-`v`, or `fn`) rides along.
-///
-/// Three outcomes of the one policy, so one handler.
+/// Run the key through `jk`. A key the run does not take is passed through with the flags it arrived with.
 pub(crate) fn pass_through<'x>(
     ev: &KeyEvent,
     _snap: (),
     mut p: TypingLayerPath<'x>,
 ) -> (Vec<MercuryEffect>, Completed<TypingLayerPath<'x>>) {
-    // The run is idle before this key iff this key opens it, which is when its window is
-    // armed. Every other outcome ends the run, which drops the guard and cancels the
-    // wait.
+    // Idle before this key iff this key opens the run, which is when the window is armed.
     let opening = p.get().jk.is_idle();
     match p.get_mut().jk.advance(ev) {
         KeySequenceOutcome::Advanced if opening => match p.get().jk.window() {
@@ -45,8 +38,7 @@ pub(crate) fn pass_through<'x>(
     }
 }
 
-/// The window elapsed with no next key: what the run swallowed types itself, exactly as a key
-/// that broke the run would have made it.
+/// Window elapsed: replay what the run swallowed.
 #[expect(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn jk_timeout<'x>(
     _ev: &TimerFired,

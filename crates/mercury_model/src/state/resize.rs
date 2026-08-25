@@ -7,10 +7,7 @@ use crate::handlers::*;
 
 use super::ReturnHomeLayersPath;
 
-/// The resize layer: the arrows place the focused window and return home. Like nav, a one-shot
-/// chooser, so it idles back home too.
-/// The keymap the overlay shows for this layer. Beside the bindings it describes, so the two are
-/// changed together or the drift is obvious.
+/// Overlay keymap. Beside the binds it describes.
 pub(crate) const OVERLAY: &str = include_str!("overlays/resize.txt");
 
 #[derive(Bind, Debug)]

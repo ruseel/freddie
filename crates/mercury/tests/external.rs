@@ -1,8 +1,4 @@
-//! The event socket wired to mercury's vocabulary, the way `run` wires it.
-//!
-//! `main` composes `freddie_event_socket::listen(port, mercury::on_message)`. These drive that same
-//! composition over a real connection, on an OS-assigned port so a running mercury is never
-//! disturbed and two test binaries never collide.
+//! Event socket tests. OS-assigned port so a running mercury is not disturbed.
 
 use std::time::Duration;
 
@@ -13,7 +9,6 @@ use tokio_tungstenite::tungstenite::Message;
 
 const SETTLE: Duration = Duration::from_millis(250);
 
-/// A listener wired to mercury's vocabulary, and the channel the events land on.
 fn listen_for_events() -> (
     freddie_event_socket::EventSocket,
     u16,
@@ -28,7 +23,6 @@ fn listen_for_events() -> (
     (socket, port, event_rx)
 }
 
-/// A tab frame becomes the event the model dispatches.
 #[tokio::test]
 async fn a_tab_frame_arrives_as_an_event() {
     let (_socket, port, mut event_rx) = listen_for_events();
@@ -49,8 +43,6 @@ async fn a_tab_frame_arrives_as_an_event() {
     }
 }
 
-/// A frame outside the vocabulary is dropped, and dropping one neither panics the socket's runtime
-/// nor closes the connection the client is still using.
 #[tokio::test]
 async fn an_unknown_frame_is_dropped_without_disturbing_the_connection() {
     let (_socket, port, mut event_rx) = listen_for_events();
@@ -69,7 +61,6 @@ async fn an_unknown_frame_is_dropped_without_disturbing_the_connection() {
     tokio::time::sleep(SETTLE).await;
     assert!(event_rx.try_recv().is_err(), "nothing was dispatched");
 
-    // Still open, and still delivering.
     ws.send(Message::Text(
         r#"{"kind":"IncomingEvent.Tab","value":{"url":"https://example.com/"}}"#.to_owned(),
     ))
@@ -82,7 +73,6 @@ async fn an_unknown_frame_is_dropped_without_disturbing_the_connection() {
     );
 }
 
-/// A web page cannot reach mercury's vocabulary at all, through this composition.
 #[tokio::test]
 async fn a_web_page_cannot_connect() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -106,7 +96,7 @@ async fn a_web_page_cannot_connect() {
     );
 }
 
-/// The default port is what the extension hardcodes, so a change here has to be a change there.
+/// The default port is what the extension hardcodes; a change here has to be a change there.
 #[test]
 fn the_default_port_is_the_one_the_extension_uses() {
     assert_eq!(mercury::DEFAULT_PORT, 3883);

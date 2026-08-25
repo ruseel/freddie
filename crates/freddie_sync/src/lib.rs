@@ -1,32 +1,17 @@
-//! The two-phase sync of a mirrored value: [`Synced`], and the correlation token that pairs a
-//! read with the placeholder awaiting it.
+//! Two-phase sync of a mirrored value: [`Synced`], and the token that pairs a read with its
+//! placeholder.
 
-/// The placeholder's half of a correlation token: minted only beside its [`RidingGeneration`]
-/// twin, moved once into the [`Synced::Pending`] placeholder, and spent when a riding half is
-/// used against it.
-///
-/// Opaque: not `Copy`, not `Clone`, not comparable — no code outside this module can do
-/// anything with one except put it where it belongs.
+/// The placeholder's half of a correlation token. Not `Copy`, not `Clone`, not comparable.
 #[derive(Debug)]
 pub struct HeldGeneration(u64);
 
-/// The travelling half: minted beside its [`HeldGeneration`] twin, moved once into the read
-/// effect the model emits, and carried home by the read's value event.
-///
-/// Opaque like its twin, and not publicly comparable: the only thing that can be done with one
-/// is handing it to [`Synced::commit`]. It is used by reference, not consumed, because an
-/// event may be handled multiple times, so dispatch hands every handler `&E` and nothing can
-/// move a payload out of an event. Its single use is behavioral instead: it lives only inside
-/// its value event, which dispatches once and is dropped, and a repeat meeting finds `Known`
-/// or a mismatched `Pending` and does nothing.
+/// The travelling half. Handed to [`Synced::commit`] by reference, because dispatch hands
+/// every handler `&E` and an event may be handled more than once.
 #[derive(Debug)]
 pub struct RidingGeneration(u64);
 
-/// Two riding halves compare equal under `testing` whatever their ids.
-///
-/// The id exists to pair a read with its placeholder at [`Synced::commit`]. A test that
-/// rebuilds an expected effect cannot know it. A test that cares about a landing uses the
-/// generation on the effect that requested the read.
+/// Two riding halves compare equal under `testing` whatever their ids. A rebuilt expected
+/// effect cannot know the id.
 #[cfg(feature = "testing")]
 impl PartialEq for RidingGeneration {
     fn eq(&self, _other: &Self) -> bool {
@@ -37,17 +22,13 @@ impl PartialEq for RidingGeneration {
 #[cfg(feature = "testing")]
 impl Eq for RidingGeneration {}
 
-/// The model's generation mint: a counter on the root, so minting is a function of state — the
-/// same shape as timer-guard creation, the model's one sanctioned impurity.
-///
-/// One per model, never per key: per-key counters restart when a key (a pid, a window id) is
-/// reused by the OS, and a restarted counter could pair a zombie read with a fresh placeholder.
-/// One counter makes that unrepresentable.
+/// A counter on the root. One per model: a per-key counter would restart when the OS reuses
+/// a pid or window id, and could pair a zombie read with a fresh placeholder.
 #[derive(Default, Debug)]
 pub struct GenerationMinter(u64);
 
 impl GenerationMinter {
-    /// The matched pair: the placeholder's half, and the half that rides the read effect home.
+    /// The placeholder's half, and the half that rides the read effect home.
     pub fn mint(&mut self) -> (HeldGeneration, RidingGeneration) {
         self.0 += 1;
         (HeldGeneration(self.0), RidingGeneration(self.0))
@@ -56,37 +37,32 @@ impl GenerationMinter {
 
 /// One value synced from the outside world in two phases.
 ///
-/// The fact ("it changed") empties the entry: the moment the fact exists, the old value is a
-/// lie, and the placeholder holds one half of the token whose read is in flight. The value
-/// ("this is what it changed to") fills the entry iff it brings the matching half home.
-///
-/// No ordering is owed by anyone: the placeholder is written in the same dispatch that emits
-/// the read effect, so a value event cannot exist before its placeholder does.
+/// The fact empties the entry. The value fills it only if it brings the matching half home.
+/// The placeholder is written in the same dispatch that emits the read effect, so a value
+/// event cannot exist before its placeholder does.
 #[derive(Debug)]
 pub enum Synced<V> {
-    /// The fact arrived; the read carrying this token's twin is in flight. No current value
-    /// exists.
+    /// The fact arrived; the matching read is in flight. No current value.
     Pending(HeldGeneration),
     /// What the last landed read answered.
     Known(V),
 }
 
 impl<V> Synced<V> {
-    /// The fact: the old value dies, and the placeholder takes its half of the pair.
+    /// The old value dies; the placeholder takes its half of the pair.
     pub fn change(&mut self, held: HeldGeneration) {
         *self = Self::Pending(held);
     }
 
-    /// The value: applied iff the riding half matches the placeholder's. A slow read that
-    /// lands after a newer fact brings a half whose twin was replaced and changes nothing.
+    /// Applied only if the riding half matches the placeholder. A slow read after a newer
+    /// fact changes nothing.
     pub fn commit(&mut self, riding: &RidingGeneration, value: V) {
         if matches!(self, Self::Pending(HeldGeneration(held)) if *held == riding.0) {
             *self = Self::Known(value);
         }
     }
 
-    /// The current value, if the sync has one. `Pending` is "no value right now", never the
-    /// old one.
+    /// The current value, if the sync has one. `Pending` is no value, never the old one.
     #[must_use]
     pub const fn known(&self) -> Option<&V> {
         match self {

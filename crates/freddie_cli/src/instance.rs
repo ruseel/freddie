@@ -1,13 +1,9 @@
-//! Which daemon a command line meant, and where that daemon's files go.
+//! Which daemon a command line named, and where that daemon's files go.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-/// Which daemon this is.
-///
-/// The slug names a lock file and a log file, so it is whatever the filesystem will take. The
-/// display name is what a person typed, so `status` says something they recognize. For an app
-/// with one global daemon both are its name.
+/// One daemon: `slug` names its lock and log files; `display_name` is what the person typed.
 #[derive(Clone, Debug)]
 pub struct Instance {
     slug: String,
@@ -30,19 +26,11 @@ impl Instance {
         Self::named(app, app, app)
     }
 
-    /// One of many: `slug` names its files, `display_name` is what the person who asked for it
-    /// typed.
-    ///
-    /// `slug` has to be stable across two invocations that mean the same daemon, and distinct for
-    /// two that do not, since it is the whole of what the lock is keyed to. A path that has been
-    /// resolved, or a hash of one, is the shape of it. It also has to be a filename, because it
-    /// becomes one.
+    /// One of many. `slug` is a filename, stable for the same daemon and distinct across daemons.
     ///
     /// # Errors
     ///
-    /// [`NoUserDir`] when the environment does not say where this user's files go, which is the
-    /// one thing about placing a daemon that can fail. Both paths resolve here, once, rather than
-    /// at each call that wants one: an instance that exists is one whose files have a place to be.
+    /// [`NoUserDir`] when the environment names no per-user directory.
     pub fn named(
         app: &str,
         slug: impl Into<String>,
@@ -67,8 +55,8 @@ impl Instance {
 
     /// The directory this daemon's log goes in, one per app.
     ///
-    /// Kept apart from the file name because that is how `tracing_appender` takes them, and
-    /// because the directory is what has to be created before anything opens the file.
+    /// Split from the file name because `tracing_appender` takes them that way, and the
+    /// directory has to exist before the file is opened.
     #[must_use]
     pub fn log_dir(&self) -> &Path {
         &self.log_dir
@@ -80,7 +68,7 @@ impl Instance {
         &self.log_file_name
     }
 
-    /// The two of them joined, for saying where the log is and for reading it back.
+    /// `log_dir` joined with `log_file_name`.
     #[must_use]
     pub fn log_file(&self) -> PathBuf {
         self.log_dir.join(&self.log_file_name)
@@ -112,10 +100,7 @@ impl Instance {
     }
 }
 
-/// The environment names no per-user directory to keep this daemon's lock and log in.
-///
-/// One error for both, because one environment answers for both: the lookup that places the lock
-/// is the lookup that places the log, and a daemon missing either was never going to run.
+/// The environment names no per-user directory for this daemon's lock and log.
 #[derive(Debug)]
 pub struct NoUserDir;
 
@@ -127,23 +112,19 @@ impl fmt::Display for NoUserDir {
 
 impl std::error::Error for NoUserDir {}
 
-/// This user's home. Unix only, because the Windows log directory is under `%LOCALAPPDATA%`
-/// rather than the profile root.
+/// This user's home. Unix only; Windows logs go under `%LOCALAPPDATA%`.
 #[cfg(unix)]
 fn home() -> Result<PathBuf, NoUserDir> {
     std::env::var_os("HOME").map(PathBuf::from).ok_or(NoUserDir)
 }
 
-/// The per-user directory `app`'s logs go in: the platform's place for logs a person is expected
-/// to read. Each sits beside where `freddie_single_instance` puts the lock, so a daemon that can
-/// take its lock can write its log.
+/// Per-user directory for `app`'s logs, beside the single-instance lock.
 #[cfg(target_os = "macos")]
 fn log_dir(app: &str) -> Result<PathBuf, NoUserDir> {
     Ok(home()?.join("Library/Logs").join(app))
 }
 
-/// `$XDG_STATE_HOME`, defaulting to `~/.local/state`. The base directory specification has no log
-/// directory of its own and names state as where a log belongs.
+/// `$XDG_STATE_HOME`, defaulting to `~/.local/state`. XDG has no log directory of its own.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn log_dir(app: &str) -> Result<PathBuf, NoUserDir> {
     let base = match std::env::var_os("XDG_STATE_HOME") {
@@ -176,8 +157,6 @@ mod tests {
         assert_eq!(instance.log_file_name(), "testapp.log");
     }
 
-    // Two ids that name two daemons keep every file of theirs apart, which is the whole of what
-    // an instance is for.
     #[test]
     fn two_instances_share_no_file() {
         let a = Instance::named("testapp", "testapp-a", "./a.json").expect("HOME is set");

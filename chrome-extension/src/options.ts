@@ -1,12 +1,10 @@
-// `export {}` makes this a module, which is what allows the top-level `await` below. It has
-// nothing to export.
+// `export {}` makes this a module so the top-level `await` below is allowed.
 export {};
 
 const DEFAULT_PORT = 3883;
 
 const input = document.querySelector<HTMLInputElement>("#port");
-// Not `status`: that name is `window.status`, a string, so declaring it here collides with a
-// global rather than shadowing it.
+// `status` is `window.status`; declaring it here collides with the global.
 const statusLine = document.querySelector<HTMLParagraphElement>("#status");
 if (input === null || statusLine === null) {
   throw new Error("the options page is missing its input");

@@ -1,7 +1,4 @@
 //! The `KeySequence` state machine, over `[j, k]` unless a case needs another shape.
-//!
-//! Every case is a stream of key events fed to one sequence, asserting the outcome of each. The
-//! machine is a pure function of what it has swallowed and the event, so the table is checkable.
 
 use freddie::{KeySequence, KeySequenceOutcome};
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
@@ -33,7 +30,6 @@ const fn with_flags(mut ev: KeyEvent, flags: ModifierFlags) -> KeyEvent {
     ev
 }
 
-/// The presses a broken run replays, or `None` when the outcome was not a break.
 fn replayed(outcome: KeySequenceOutcome) -> Option<Vec<KeyPressed>> {
     match outcome {
         KeySequenceOutcome::Passed(presses) => Some(
@@ -46,7 +42,6 @@ fn replayed(outcome: KeySequenceOutcome) -> Option<Vec<KeyPressed>> {
     }
 }
 
-/// A `KeyPress` that prints readably in a failed assertion.
 #[derive(PartialEq, Eq, Debug)]
 struct KeyPressed(Key, PressType);
 
@@ -70,7 +65,6 @@ fn deliberate_completes() {
 
 #[test]
 fn rolled_completes() {
-    // k goes down before j comes up, which is what typing it at speed produces.
     let mut s = jk();
     assert_eq!(s.advance(&down(Key::KeyJ)), KeySequenceOutcome::Advanced);
     assert_eq!(s.advance(&down(Key::KeyK)), KeySequenceOutcome::Completed);
@@ -112,7 +106,6 @@ fn breaking_after_a_full_j_tap_replays_both_halves() {
 fn a_modifier_flag_breaks_the_run() {
     let mut s = jk();
     let _ = s.advance(&down(Key::KeyJ));
-    // The k that would have completed it does not, because it arrived under cmd.
     assert_eq!(
         replayed(s.advance(&with_flags(down(Key::KeyK), ModifierFlags::COMMAND))),
         Some(vec![d(Key::KeyJ)]),
@@ -132,7 +125,7 @@ fn a_modifier_flag_stops_the_run_opening() {
 
 #[test]
 fn fn_alone_stops_the_run_opening() {
-    // `fn` never arrives as a key, only as a flag on another, and it counts like any other.
+    // `fn` arrives only as a flag on another key.
     let mut s = jk();
     assert_eq!(
         replayed(s.advance(&with_flags(down(Key::KeyJ), ModifierFlags::FN))),
@@ -142,8 +135,6 @@ fn fn_alone_stops_the_run_opening() {
 
 #[test]
 fn an_auto_repeat_breaks_the_run() {
-    // A held key repeats its down with no up between, so the second down is a down of a key that
-    // is already down. It breaks, and the swallowed down replays ahead of it.
     let mut s = jk();
     let _ = s.advance(&down(Key::KeyJ));
     assert_eq!(
@@ -155,8 +146,7 @@ fn an_auto_repeat_breaks_the_run() {
 
 #[test]
 fn an_up_for_a_key_the_run_never_took_breaks_it() {
-    // `a` was held before the run started, so its up is not the run's to swallow: the app saw the
-    // down and is owed the up.
+    // `a` was held before the run started, so its up is not the run's to swallow.
     let mut s = jk();
     let _ = s.advance(&down(Key::KeyJ));
     assert_eq!(
@@ -178,8 +168,6 @@ fn a_second_up_for_a_key_already_released_breaks_it() {
 
 #[test]
 fn the_breaking_key_does_not_open_a_new_run() {
-    // j, j: the second j breaks the first run rather than starting a second, so a k after it is an
-    // ordinary k.
     let mut s = jk();
     let _ = s.advance(&down(Key::KeyJ));
     let _ = s.advance(&up(Key::KeyJ));
@@ -216,7 +204,6 @@ fn a_repeated_key_sequence_fires_on_a_double_tap_but_not_on_a_hold() {
     assert_eq!(s.advance(&up(Key::KeyJ)), KeySequenceOutcome::Advanced);
     assert_eq!(s.advance(&down(Key::KeyJ)), KeySequenceOutcome::Completed);
 
-    // Held, the repeat arrives with j still down and breaks it instead.
     let mut s = KeySequence::new(JJ, None);
     let _ = s.advance(&down(Key::KeyJ));
     assert_eq!(
@@ -227,8 +214,6 @@ fn a_repeated_key_sequence_fires_on_a_double_tap_but_not_on_a_hold() {
 
 #[test]
 fn a_longer_run_replays_interleaved_ups_in_arrival_order() {
-    // Three keys can be down at once, so the ups interleave with the downs and only the order they
-    // arrived in reproduces the stream.
     const JKL: &[Key] = &[Key::KeyJ, Key::KeyK, Key::KeyL];
 
     let mut s = KeySequence::new(JKL, None);
@@ -260,8 +245,6 @@ fn an_empty_sequence_is_rejected() {
 
 #[test]
 fn debug_shows_how_far_the_run_has_got() {
-    // It is written on every dispatched event, so it carries only what moves: the keys matched so
-    // far, never the sequence's own definition, and never the swallowed ups.
     const JKL: &[Key] = &[Key::KeyJ, Key::KeyK, Key::KeyL];
 
     let mut s = KeySequence::new(JKL, None);

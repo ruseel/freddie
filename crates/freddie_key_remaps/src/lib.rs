@@ -1,9 +1,7 @@
-//! Shareable pure keyboard remaps: dual-role state machines and flag rewrites over [`freddie_keys`].
+//! Dual-role state machines and flag rewrites over [`freddie_keys`].
 //!
-//! No effects, no timers, no bind. A consumer feeds [`freddie_keys::KeyEvent`]s, gets back events
-//! to emit and flags to stamp. State lives in the struct the consumer owns on its root model.
-//!
-//! Ordered timed chords (`jk`) live in `freddie::KeySequence`, not here.
+//! A consumer feeds [`freddie_keys::KeyEvent`]s and gets back events to emit and flags to stamp.
+//! Ordered timed chords (`jk`) live in `freddie::KeySequence`.
 
 mod alone_or_modifier;
 mod invert_shift;

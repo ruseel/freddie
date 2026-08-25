@@ -1,5 +1,4 @@
-//! A shell node generic over its child: the doll shape, `Shell<Inner>`, where the child
-//! exists only for separation and the composition is written at the instantiation.
+//! A shell node generic over its child.
 
 mod common;
 
@@ -25,7 +24,6 @@ pub struct Inner;
 pub type ShellPath<'a> = &'a mut Shell<Inner>;
 pub type InnerPath<'a> = PathMut<Inner, ShellPath<'a>>;
 
-// Bound on the generic shell, so it is generic over the parameter it does not inspect.
 fn outer_key<'x, E, Next: 'static>(
     _ev: &E,
     _snap: (),

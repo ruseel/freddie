@@ -1,10 +1,8 @@
-//! Keyboard interception and emission for freddie, on macOS via `core-graphics`.
+//! Keyboard interception and emission on macOS via `core-graphics`.
 //!
-//! [`intercept`] grabs the keyboard and hands back an [`Interceptor`] and an
-//! [`Emitter`]. The interceptor's callback decides each key and returns what it
-//! becomes (`Some(same)` passes, `Some(other)` remaps, `None` drops); the emitter
-//! synthesizes keys not tied to an intercepted event. See
-//! `refactors/past/keyboard-capture.md`.
+//! [`intercept`] grabs the keyboard and hands back an [`Interceptor`] and an [`Emitter`].
+//! The interceptor's callback returns `Some(same)` to pass, `Some(other)` to remap, or
+//! `None` to drop. The emitter synthesizes keys not tied to an intercepted event.
 
 use std::fmt;
 
@@ -16,8 +14,7 @@ pub use freddie_hid_device::{DeviceInfo, ResolveFailure, SourceId};
 mod sys;
 pub use sys::{Emitter, Interceptor, intercept, intercept_with_source};
 
-/// The keyboard could not be intercepted. On macOS this usually means
-/// Accessibility (or Input Monitoring) is not granted.
+/// The keyboard could not be intercepted. Usually Accessibility is not granted.
 #[derive(Debug)]
 pub struct CaptureError;
 

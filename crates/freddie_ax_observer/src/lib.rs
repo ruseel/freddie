@@ -1,14 +1,8 @@
 //! One `AXObserver` per observable app, kept current as apps launch and quit.
 //!
-//! The scaffolding a per-app Accessibility watcher stands on: [`watch_apps`] creates an
-//! observer for every observable app now running and for every one that launches later, tears
-//! it down at termination, and keeps each app's consumer-built registration at a stable
-//! address for the life of that app's observer. What to register and what to do with a
-//! notification is the consumer's: it brings the C callback, the registration builder, and
-//! the per-app install and teardown hooks.
-//!
-//! Every callback runs on the main thread, from its run loop.
-//!
+//! [`watch_apps`] creates an observer for every observable app now running and for every
+//! one that launches later. The consumer brings the C callback, the registration builder,
+//! and the per-app install and teardown hooks. Every callback runs on the main thread.
 //! macOS only.
 
 use std::cell::RefCell;
@@ -35,26 +29,17 @@ use objc2_foundation::{NSNotification, NSNotificationCenter, NSNotificationName}
 
 pub use freddie_windows_types::Pid;
 
-/// An app whose windows a user could be looking at, which is the only kind worth observing.
+/// An app whose windows a user could be looking at.
 ///
-/// macOS runs UI services alongside the apps: `CursorUIViewService` draws the text cursor and
-/// `Open and Save Panel Service` draws a file dialog, and each of them owns real windows with
-/// real ids. Those windows post the same Accessibility notifications an app's windows do, so a
-/// watcher that observes every process records one of them as the focused window whenever the
-/// user puts a cursor in a text field, and a placement then moves an invisible 64x64 box
-/// instead of the window in front of the user.
-///
-/// Their activation policy is what separates them: `prohibited` means macOS will not let the
-/// user bring the app forward at all, so nothing it owns can be what a placement is aimed at.
-/// Accessory apps stay in, because a menu bar app has no Dock icon but does have windows, and
-/// its settings window is placed like any other.
-///
-/// Built only by [`Self::of`], so an app that has not been vetted cannot be observed.
+/// macOS UI services (`CursorUIViewService`, `Open and Save Panel Service`) own real
+/// windows and post the same Accessibility notifications. Observing them records an
+/// invisible 64x64 box as the focused window. Their activation policy is `Prohibited`.
+/// Accessory apps stay in: a menu-bar app has windows.
 #[derive(Clone, Copy, Debug)]
 pub struct ObservableApp(pub Pid);
 
 impl ObservableApp {
-    /// `app` if its windows can be looked at, `None` if it is one of the UI services.
+    /// `app` if its windows can be looked at, `None` if it is a UI service.
     #[must_use]
     pub fn of(app: &NSRunningApplication) -> Option<Self> {
         (app.activationPolicy() != NSApplicationActivationPolicy::Prohibited)
@@ -62,8 +47,7 @@ impl ObservableApp {
     }
 }
 
-/// One app the watcher can see: the observer to register notifications on, and the app
-/// element they are registered against. Borrowed for the duration of one callback.
+/// One app the watcher can see, borrowed for the duration of one callback.
 pub struct AppSeen {
     pub pid: Pid,
     pub observer: AXObserverRef,
@@ -74,21 +58,18 @@ pub struct AppSeen {
 pub type NotificationCallback =
     unsafe extern "C" fn(AXObserverRef, AXUIElementRef, CFStringRef, *mut c_void);
 
-/// The consumer's per-app install hook: the app seen, and the stable `refcon` its
-/// registrations carry.
 type OnApp = Box<dyn Fn(&AppSeen, *mut c_void)>;
 
 /// One app's observer, and the `refcon` its callbacks reach the consumer's state through.
 struct AppObserver<R> {
     observer: AXObserverRef,
-    /// The `refcon` every notification for this app carries. Boxed so its address is
-    /// stable, and owned here so it is freed exactly when the observer naming it is.
+    /// Boxed so its address is stable; freed when the observer naming it is.
     _registration: Box<R>,
 }
 
 impl<R> Drop for AppObserver<R> {
-    /// Removes the run loop source and releases the observer, in that order: the source
-    /// must be gone before the registration that its callbacks dereference is dropped.
+    /// Remove the run loop source, then release the observer. The source must be gone
+    /// before the registration that its callbacks dereference is dropped.
     fn drop(&mut self) {
         // SAFETY: `observer` is live and was created by `AXObserverCreate`. Getting its
         // source takes no ownership; removing it and releasing the observer is the
@@ -105,10 +86,7 @@ impl<R> Drop for AppObserver<R> {
     }
 }
 
-/// What the launch and terminate callbacks reach: the per-app map and the consumer's hooks.
-///
-/// Main-thread only: [`watch_apps`] and both workspace callbacks run there, so the `RefCell`
-/// is never contended.
+/// Per-app map and consumer hooks. Main-thread only.
 struct Inner<R> {
     apps: RefCell<HashMap<Pid, AppObserver<R>>>,
     callback: NotificationCallback,
@@ -117,31 +95,22 @@ struct Inner<R> {
     on_app_gone: Box<dyn Fn(Pid)>,
 }
 
-/// One `AXObserver` per observable app, kept across launches and terminations.
-///
-/// `R` is the consumer's per-app registration: built once per app, boxed here so its address
-/// is stable for the life of that app's observer, handed to the consumer's registrations as
-/// the `refcon`, and freed when the observer is released. `!Send`: main thread only, like the
-/// window watcher this was extracted from.
+/// One `AXObserver` per observable app. `R` is the consumer's per-app registration,
+/// boxed so its address is stable for the life of that app's observer. `!Send`.
 pub struct AppWatch<R> {
-    /// The workspace observations. Declared first so they stop before the map they write
-    /// into is torn down: fields drop in declaration order.
+    /// Declared first so they stop before the map they write into is torn down.
     _notifications: Vec<Observation>,
     _inner: Rc<Inner<R>>,
 }
 
-/// Watch one app: create its observer, hand the consumer its hooks.
-///
-/// An app that refuses Accessibility, or has not finished launching, fails
-/// `AXObserverCreate`. Logged at `debug` and skipped: every other app goes on being
-/// observed.
+/// Create one app's observer and hand the consumer its hooks. An app that refuses
+/// Accessibility, or has not finished launching, is logged at `debug` and skipped.
 fn observe_app<R>(inner: &Rc<Inner<R>>, ObservableApp(pid): ObservableApp) {
     if inner.apps.borrow().contains_key(&pid) {
         return;
     }
 
-    // Before the observer, so the one early return between the two `Create` calls happens
-    // while there is still nothing to release.
+    // Before the observer, so an early return between the two `Create` calls has nothing to release.
     // SAFETY: `pid` names a live process and the element is +1, released with the `Owned`.
     #[expect(unsafe_code)]
     let app = unsafe { AXUIElementCreateApplication(pid.0) };
@@ -191,10 +160,8 @@ fn observe_app<R>(inner: &Rc<Inner<R>>, ObservableApp(pid): ObservableApp) {
     (inner.on_app)(&seen, refcon);
 }
 
-/// Stop watching an app.
-///
-/// The observer is dropped before `on_app_gone` runs: that removes its run loop source so a
-/// late notification cannot run against a registration that no longer exists.
+/// Drop the observer before `on_app_gone`, so a late notification cannot run against a
+/// registration that no longer exists.
 fn forget_app<R>(inner: &Inner<R>, pid: Pid) {
     if inner.apps.borrow_mut().remove(&pid).is_none() {
         return;
@@ -204,11 +171,8 @@ fn forget_app<R>(inner: &Inner<R>, pid: Pid) {
 
 /// Observe every running observable app now and every one that launches later.
 ///
-/// `callback` is the consumer's C notification callback (its `refcon` is the `&R` for that
-/// app). `on_app` runs once per observed app — at install for the running set, at launch for
-/// the rest — and is where the consumer registers its notifications and seeds; it receives
-/// the stable `refcon` pointer for those registrations. `on_app_gone` runs after the app's
-/// observer and registration are torn down.
+/// `callback` is the consumer's C notification callback. `on_app` runs once per observed
+/// app and receives the stable `refcon`. `on_app_gone` runs after the observer is torn down.
 pub fn watch_apps<R: 'static>(
     callback: NotificationCallback,
     make_registration: impl Fn(&AppSeen) -> R + 'static,
@@ -241,7 +205,6 @@ pub fn watch_apps<R: 'static>(
                 return;
             };
             if launched {
-                // ObservableApp::of drops UI services: they have no windows worth watching.
                 if let Some(app) = ObservableApp::of(&app) {
                     observe_app(&inner, app);
                 }
@@ -267,15 +230,12 @@ pub fn watch_apps<R: 'static>(
 }
 
 /// Subscribe `observer` to one notification on `element`, carrying `refcon`.
-///
-/// A failure is logged and skipped: an app that will not answer for one notification is
-/// still worth observing for the rest.
+/// A failure is logged and skipped.
 ///
 /// # Safety
 ///
-/// `observer` and `element` must be live, and `refcon` must be null or a pointer that stays
-/// valid for as long as the observer can deliver — the boxed registration [`watch_apps`]
-/// hands its hooks qualifies.
+/// `observer` and `element` must be live, and `refcon` must stay valid for as long as the
+/// observer can deliver.
 #[expect(unsafe_code)]
 pub unsafe fn add_notification(
     observer: AXObserverRef,
@@ -292,15 +252,10 @@ pub unsafe fn add_notification(
     }
 }
 
-/// A +1 CoreFoundation reference, released when it drops.
-///
-/// Deliberately not `Copy` and not `Clone`: two of these naming one reference would
-/// release it twice.
+/// A +1 CoreFoundation reference, released when it drops. Not `Copy` or `Clone`.
 struct Owned(CFTypeRef);
 
 impl Owned {
-    /// Take ownership of what a `Create` or `Copy` returned, or `None` if it returned
-    /// nothing.
     fn new(raw: CFTypeRef) -> Option<Self> {
         (!raw.is_null()).then_some(Self(raw))
     }
@@ -318,15 +273,11 @@ impl Drop for Owned {
 }
 
 /// One registered notification observer, deregistered when it drops.
-///
-/// The center is held with the token because deregistering needs the same one that
-/// registered: app launches come from `NSWorkspace`'s center and screen changes from the
-/// default one.
+/// The center is held with the token because deregistering needs the same one that registered.
 pub struct Observation {
     center: Retained<NSNotificationCenter>,
     token: Retained<ProtocolObject<dyn NSObjectProtocol>>,
-    /// Held so the callback outlives the observation. The center copies the block, but the
-    /// closure it wraps is ours to keep alive.
+    /// The center copies the block; the closure it wraps is ours to keep alive.
     _block: RcBlock<dyn Fn(NonNull<NSNotification>)>,
 }
 
@@ -342,7 +293,6 @@ impl Drop for Observation {
     }
 }
 
-/// Register `on_notification` for `name` on `center`.
 pub fn observe_notification(
     center: &Retained<NSNotificationCenter>,
     name: &NSNotificationName,
@@ -355,9 +305,8 @@ pub fn observe_notification(
         on_notification(notif);
     });
 
-    // SAFETY: `name` is an immutable extern static. The block is invoked on the main
-    // thread, which is where the state it captures lives, and `Observation` owns both the
-    // token and the block and deregisters before either is dropped.
+    // SAFETY: `name` is an immutable extern static. The block runs on the main thread.
+    // `Observation` deregisters before the token or the block is dropped.
     #[expect(unsafe_code)]
     let token = unsafe {
         center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block)

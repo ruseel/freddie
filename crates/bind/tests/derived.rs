@@ -1,11 +1,4 @@
-//! A level that is not in the tree.
-//!
-//! `#[derived_children(f)]` on a node whose child is no field; `#[derived_node(parent_path = ..)]` on
-//! the struct that child fn returns. `f` is `fn(&Parent) -> Option<Data>`: a shared reference,
-//! so it cannot mutate, and it never holds the parent, so it cannot lose it.
-//!
-//! The tree here has TWO derived levels, one under the other, to pin that a derived level can
-//! itself have a derived child and that a miss hands the parent back at every level.
+//! A level that is not in the tree. Two derived levels, one under the other: a derived level can have a derived child, and a miss hands the parent back at every level.
 
 mod common;
 
@@ -20,7 +13,6 @@ use std::collections::HashSet;
 #[node(root)]
 #[binds(Demo)]
 pub struct Root {
-    /// The only copy. The layer stores no app.
     pub app: Option<Chrome>,
     #[child]
     pub layer: Shell,
@@ -40,7 +32,6 @@ pub struct Shell {
     pub log: String,
 }
 
-/// A derived level. Not in the tree; `app_data` builds it.
 #[derive(Bind)]
 #[derived_node(parent_path = ShellPath)]
 #[binds(Demo)]
@@ -51,7 +42,6 @@ pub struct AppData {
     pub tab: String,
 }
 
-/// A derived level UNDER a derived level. Its parent is a `DerivedLevel`, not a `PathMut`.
 #[derive(Bind)]
 #[derived_node(parent_path = AppNode)]
 #[binds(Demo)]
@@ -69,7 +59,6 @@ pub enum R<'a> {
     Shell(ShellPath<'a>),
 }
 
-/// `#[derived_children]`. It reads root state that is not on its path, and returns only the DATA.
 fn app_data(path: &ShellPath) -> Option<AppData> {
     let chrome = path.parent().app.as_ref()?;
     Some(AppData {
@@ -77,21 +66,16 @@ fn app_data(path: &ShellPath) -> Option<AppData> {
     })
 }
 
-/// A derived child fn on a DERIVED level. Same shape; `&Parent` is a `&DerivedLevel`.
 fn tab_data(node: &AppNode) -> Option<TabData> {
     (node.data.tab == "gmail").then_some(TabData { thread: 7 })
 }
 
-/// The pre takes the level's own data while the node is whole, since the descent consumes it
-/// and the ascent holds only the place beneath.
+/// Takes the level's data while the node is whole: descent consumes it, ascent holds only the place beneath.
 fn snap_tab(_ev: &KeyEvent, node: &AppNode) -> String {
     node.data.tab.clone()
 }
 
-/// What the pre took, written into the layer, which is where the ascent stands.
-///
-/// The snap arrives by value because its type is whatever the pre returned, and this one had to
-/// clone: the node it read is consumed by the descent before the ascent runs.
+/// Writes the snap into the layer. The snap is owned because the node it was read from is consumed by descent before ascent runs.
 #[expect(clippy::needless_pass_by_value)]
 fn on_r<'x>(
     ev: &KeyEvent,
@@ -107,7 +91,6 @@ fn on_r<'x>(
     }
 }
 
-/// Two levels down: its own data and the parent LEVEL's, both taken before the descent.
 fn snap_tab_thread(_ev: &KeyEvent, node: &TabNode) -> (String, u32) {
     (node.parent.data.tab.clone(), node.data.thread)
 }
@@ -140,7 +123,6 @@ fn on_esc<'x>(
     }
 }
 
-/// A leave FROM a derived level: it ascends at Shell, so it leaves by walking off Shell's path.
 fn app_home<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -152,8 +134,6 @@ fn app_home<'x>(
     }
 }
 
-/// Shell's post, scheduled whatever claimed: it sees what the derived level below did, so a leave
-/// from there reaches it as `Invalidated` and it reports that rather than touching the path.
 fn log_leave<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -183,25 +163,23 @@ fn root(tab: Option<&str>) -> Root {
 fn a_derived_level_binds_its_own_keys_and_reaches_the_tree_through_parent() {
     let mut r = root(Some("inbox"));
     assert_eq!(dispatch::<Demo, Root, _>(&mut r, &key("r")), vec![1]);
-    assert_eq!(r.layer.log, "inbox"); // the LAYER's real state, written from the derived level
-    assert_eq!(r.app.as_ref().unwrap().tab, "inbox"); // the tree is untouched by `data`
+    assert_eq!(r.layer.log, "inbox");
+    assert_eq!(r.app.as_ref().unwrap().tab, "inbox");
 }
 
 #[test]
 fn a_derived_level_can_have_a_derived_child() {
     let mut r = root(Some("gmail"));
     assert_eq!(dispatch::<Demo, Root, _>(&mut r, &key("g")), vec![1]);
-    assert_eq!(r.layer.log, "gmail7"); // own data, the parent level's data, and the layer
+    assert_eq!(r.layer.log, "gmail7");
 }
 
 #[test]
 fn a_miss_hands_the_parent_back_at_every_level() {
-    // The tab level misses `r`, so the app level's bind runs with its data intact.
     let mut r = root(Some("gmail"));
     assert_eq!(dispatch::<Demo, Root, _>(&mut r, &key("r")), vec![1]);
     assert_eq!(r.layer.log, "gmail");
 
-    // Both derived levels miss `esc`, so the LAYER's bind runs with its path intact.
     let mut r = root(Some("gmail"));
     assert_eq!(dispatch::<Demo, Root, _>(&mut r, &key("esc")), vec![3]);
     assert_eq!(r.layer.log, "e");
@@ -217,13 +195,7 @@ fn with_no_app_there_is_no_level_and_the_layer_still_works() {
 
 #[test]
 fn the_check_sees_a_derived_levels_binds() {
-    // Why accumulate had to take a path: with &self it cannot call a derived child fn, so
-    // the app level's `q` would be invisible to the trigger set.
-    //
-    // `r` and `g` are not in it. They are `#[pre_post]`s, whose rhs claims by naming
-    // `exclusive` itself, and the macro looks inside no rhs: what a node CLAIMS is what it
-    // writes as a `#[bind]`. Shell's `q` post is absent for the same reason, which is what
-    // lets it share a trigger with the app level's bind.
+    // `r` and `g` are `#[pre_post]`; the check collects `#[bind]` only. Shell's `q` post is absent for the same reason, so it can share a trigger with the app level's bind.
     let mut r = root(Some("gmail"));
     let set: HashSet<_> = accumulate::<Demo, Root>(&mut r).unwrap();
     assert_eq!(set, HashSet::from([kb("esc"), kb("q")]));
@@ -232,24 +204,18 @@ fn the_check_sees_a_derived_levels_binds() {
     let set: HashSet<_> = accumulate::<Demo, Root>(&mut r).unwrap();
     assert_eq!(set, HashSet::from([kb("esc"), kb("q")]));
 
-    // And with no app at all, only the layer's.
     let mut r = root(None);
     let set: HashSet<_> = accumulate::<Demo, Root>(&mut r).unwrap();
     assert_eq!(set, HashSet::from([kb("esc")]));
 }
 
-/// The derived-leave walk: `q` fires at the app level, which ascends at Shell and leaves from
-/// there; Shell's post is scheduled by the same key and sees what that leave did.
 #[test]
 fn a_leave_from_a_derived_level_reaches_the_place_as_invalidated() {
     let mut r = root(Some("gmail"));
-    // 9 from the leave, then 7 from the post's `Invalidated` arm: the post ran after it, on the
-    // state it left behind, and did not touch the path.
     assert_eq!(dispatch::<Demo, Root, _>(&mut r, &key("q")), vec![9, 7]);
     assert_eq!(r.layer.log, "", "the post's staying arm never ran");
 }
 
-/// With no level below it, nothing leaves, so the same post takes its other arm.
 #[test]
 fn the_post_marks_the_layer_when_nothing_left() {
     let mut r = root(None);
@@ -257,10 +223,6 @@ fn the_post_marks_the_layer_when_nothing_left() {
     assert_eq!(r.layer.log, "s");
 }
 
-// ---- a derived level whose data is an enum ----
-
-/// Two variants bind the same key, so which handler ran says which level was live. Their
-/// triggers do not collide: only one variant exists per dispatch.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -363,8 +325,6 @@ fn no_mode_is_no_level_at_all() {
     assert_eq!(m.shell.log, "");
 }
 
-/// A derived level's trigger is claimed only while that level is live, which is what the check
-/// walking the tree by path buys.
 #[test]
 fn the_check_sees_only_the_live_variants_trigger() {
     let mut m = modes(Some(true));

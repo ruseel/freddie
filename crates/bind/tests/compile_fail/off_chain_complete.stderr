@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `PathMut<Nav, PathMut<Layer, &mut App>>: CompletesTo<PathMut<Layer, &mut App>>` is not satisfied
-  --> tests/compile_fail/off_chain_complete.rs:26:43
+  --> tests/compile_fail/off_chain_complete.rs:25:43
    |
-26 |     let _: Completed<LayerPath<'_>> = nav.complete();
+25 |     let _: Completed<LayerPath<'_>> = nav.complete();
    |                                           ^^^^^^^^ the trait `CompletesTo<PathMut<Layer, &mut App>>` is not implemented for `PathMut<Nav, PathMut<Layer, &mut App>>`
    |
    = help: `PathMut<N, P>` implements trait `CompletesTo<O>`:

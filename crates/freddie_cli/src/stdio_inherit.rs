@@ -4,7 +4,7 @@ use std::io;
 
 /// Restores this process's stdin/stdout/stderr inherit flags when dropped.
 ///
-/// `Command::spawn` on Windows inherits every inheritable handle, not only the three
+/// On Windows, `Command::spawn` inherits every inheritable handle, not only the three
 /// `Stdio` values. A client's `output()` pipe is inheritable, so the daemon would keep
 /// it open and `output()` would never see EOF. Clearing `HANDLE_FLAG_INHERIT` on the
 /// parent's standard handles for the spawn leaves the child's `Stdio::null()` handles

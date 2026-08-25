@@ -1,11 +1,4 @@
-//! Multiple children: several `#[child]` fields and `#[derived_children]` fns live at once on
-//! one place node, visited in declared order — fields first, then derived — with each descent
-//! going through `MaybeInvalidated::descend`, so a leave that stopped at the branch point still
-//! descends the remaining siblings while the branch point stays invalidated, and a leave that
-//! went above skips them.
-//!
-//! Handlers return fixed codes rather than key lengths, one per handler, so a test reads off
-//! exactly which ran and in what order.
+//! Several `#[child]` fields and `#[derived_children]` fns on one place node. Handlers return a fixed code per handler so a test can see which ran and in what order.
 
 mod common;
 
@@ -13,7 +6,6 @@ use bind::{AscendState, Bind, dispatch, if_not_invalidated};
 use common::{Demo, KeyEvent, Keyboard, key};
 use laserbeam::{Completed, CompletesTo, MaybeInvalidated, PathMut};
 
-// Grove -> Fork -> { Left, Right }: a mid-tree branch point with two field children.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -107,7 +99,6 @@ fn fork_both<'x>(
     (vec![31], p.complete())
 }
 
-/// A leave to the branch point from a BIND row: the claim is taken and the leave stops at Fork.
 fn left_to_fork<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -116,7 +107,6 @@ fn left_to_fork<'x>(
     (vec![12], p.into_parent().complete())
 }
 
-/// A leave past the branch point: to the root, so the siblings not yet visited are skipped.
 fn left_to_grove<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -126,8 +116,7 @@ fn left_to_grove<'x>(
     (vec![13], root.complete())
 }
 
-/// A leave to the branch point from a POST: no claim is taken, so the branch point's own row
-/// would win the claim — the invalidation is what has to gate it.
+/// Leave to Fork from a post: no claim is taken, so invalidation has to gate Fork's own row.
 fn left_post_leaves<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -139,7 +128,6 @@ fn left_post_leaves<'x>(
     }
 }
 
-/// The sibling's schedule: runs whenever Right's subtree is descended, whatever Left did.
 fn right_post<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -148,7 +136,6 @@ fn right_post<'x>(
     (vec![22], st.complete())
 }
 
-/// The branch point's own row for the post-leave key: the join must keep it gated.
 fn fork_after_post<'x>(
     _ev: &KeyEvent,
     _snap: (),
@@ -188,8 +175,6 @@ fn a_leave_to_the_branch_point_still_descends_the_sibling() {
 #[test]
 fn a_stopped_here_leave_gates_the_branch_points_own_row() {
     let mut g = grove();
-    // Left's post leaves to Fork without a claim, Right's post still runs, and Fork's own row
-    // wins the free claim but finds its path invalidated, so code 32 must be absent.
     assert_eq!(
         dispatch::<Demo, Grove, _>(&mut g, &key("post-leave")),
         vec![14, 22]
@@ -199,11 +184,9 @@ fn a_stopped_here_leave_gates_the_branch_points_own_row() {
 #[test]
 fn a_leave_above_the_branch_point_skips_the_siblings_not_yet_visited() {
     let mut g = grove();
-    // Left leaves to the root, so Right's whole schedule — its post included — never runs.
     assert_eq!(dispatch::<Demo, Grove, _>(&mut g, &key("top")), vec![13]);
 }
 
-// Host: one field child and two derived children on one place node.
 #[derive(Bind)]
 #[node(root)]
 #[binds(Demo)]
@@ -330,7 +313,6 @@ fn a_field_child_outranks_a_derived_child_for_a_shared_trigger() {
     assert_eq!(dispatch::<Demo, Host, _>(&mut h, &key("shared")), vec![43]);
 }
 
-/// The check does not walk a branch point: any tree containing one errors at the call.
 #[cfg(feature = "check")]
 #[test]
 fn accumulate_errors_at_a_branch_point() {

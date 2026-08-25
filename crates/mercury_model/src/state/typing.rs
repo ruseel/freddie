@@ -10,30 +10,21 @@ use crate::{AnyKey, MercuryEffect, MercuryStruct};
 
 use super::LayerPath;
 
-/// The keymap the overlay shows for this layer. Beside the bindings it describes, so the two are
-/// changed together or the drift is obvious.
+/// Overlay keymap. Beside the binds it describes.
 pub(crate) const OVERLAY: &str = include_str!("overlays/typing.txt");
 
-/// The keys that leave typing for home.
 const JK: &[Key] = &[Key::KeyJ, Key::KeyK];
 
-/// How long a `jk` run waits for its next key before what it swallowed types itself.
-///
-/// It bounds how long a `j` stays invisible, so shorter is better, but it has to cover a
-/// deliberately typed `jk` (down, up, down) rather than only a rolled one, which is far faster.
+/// How long a `jk` run waits for the next key. Has to cover a deliberately typed `jk` (down, up, down), not only a roll.
 pub const JK_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// Arm a run's window: the guard cancels it on drop, the effect schedules it. The delay is the
-/// run's own, read off the sequence, so this does not restate the policy.
-///
-/// `pub(crate)` because the handler that calls it is not a child of this module.
+/// Arm the run's window. Delay comes from the sequence.
 pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
     let (guard, effect) = timer_effect_and_guard(window, ());
     (guard, MercuryEffect::Timer(effect))
 }
 
-/// The typing layer. Its catch-all runs every key through the `jk` run and passes it through,
-/// because typing is a passthrough layer. `jk` is the way out.
+/// Passthrough layer. `jk` leaves for home.
 #[derive(Bind, Debug)]
 #[node(parent_path = LayerPath)]
 #[binds(MercuryStruct)]
@@ -42,10 +33,7 @@ pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
     AnyKey => if_not_invalidated(pass_through),
 )]
 pub struct TypingLayer {
-    /// The `jk` run. Built fresh on entry and dropped with the layer, so a hold never outlives
-    /// the layer it was typed in, and a pending window is cancelled by the leave that drops it.
-    ///
-    /// `pub` because the integration test crate reads it to assert where a run stands.
+    /// `jk` run. Dropped with the layer, which cancels a pending window. Public for the integration tests.
     pub jk: KeySequence,
 }
 

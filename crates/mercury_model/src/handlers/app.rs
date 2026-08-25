@@ -1,9 +1,6 @@
-//! In-app units: Chrome's refresh, address bar and copies, and Ghostty's tmux window navigation.
+//! Chrome refresh, address bar, copies, and Ghostty tmux windows.
 //!
-//! The taps here emit and nothing else. What follows a tap is the bind site's business: Chrome's
-//! `l` is `and!(tap_cmd_l, enter_typing)`, because a focused address bar is somewhere you type
-//! and the in-app layer would swallow it; Chrome's `r` is `tap_cmd_r` alone, because refreshing
-//! repeats and the layer stays.
+//! Chrome's `l` is `and!(tap_cmd_l, enter_typing)`: a focused address bar is somewhere you type. Chrome's `r` stays: refreshing repeats.
 
 use freddie_keys::{Key, ModifierFlags};
 use laserbeam::{Completed, CompletesTo, HasAncestor, HasStop};
@@ -13,7 +10,6 @@ use crate::effect::{UrlPart, tap};
 use crate::sources::host;
 use crate::state::{Mercury, MercuryPath};
 
-/// Chrome's refresh: cmd-r.
 pub(crate) fn tap_cmd_r<E, P: HasStop + CompletesTo<P>>(
     _ev: &E,
     _snap: (),
@@ -22,7 +18,6 @@ pub(crate) fn tap_cmd_r<E, P: HasStop + CompletesTo<P>>(
     (vec![tap(Key::KeyR, ModifierFlags::COMMAND)], p.complete())
 }
 
-/// Chrome's address bar: cmd-l.
 pub(crate) fn tap_cmd_l<E, P: HasStop + CompletesTo<P>>(
     _ev: &E,
     _snap: (),
@@ -31,11 +26,6 @@ pub(crate) fn tap_cmd_l<E, P: HasStop + CompletesTo<P>>(
     (vec![tap(Key::KeyL, ModifierFlags::COMMAND)], p.complete())
 }
 
-/// claude.ai's new chat: cmd-shift-o, the site's own shortcut.
-///
-/// A remap rather than an automation: nothing reaches into the page. The modifiers ride as flags
-/// on the one key event, which is what keeps a modifier the user is really holding from being
-/// stranded.
 pub(crate) fn tap_cmd_shift_o<E, P: HasStop + CompletesTo<P>>(
     _ev: &E,
     _snap: (),
@@ -50,10 +40,6 @@ pub(crate) fn tap_cmd_shift_o<E, P: HasStop + CompletesTo<P>>(
     )
 }
 
-/// `shift-l` in Chrome: the front tab's whole URL, onto the clipboard.
-///
-/// A stayer that reads the tree: it reaches the root by shared reference, so the path it was
-/// handed is still there to complete at.
 pub(crate) fn copy_url<'a, E, P>(_ev: &E, _snap: (), path: P) -> (Vec<MercuryEffect>, Completed<P>)
 where
     P: HasAncestor<MercuryPath<'a>> + HasStop + CompletesTo<P>,
@@ -62,7 +48,6 @@ where
     (effects, path.complete())
 }
 
-/// `cmd-l` in Chrome: the front tab's host, onto the clipboard.
 pub(crate) fn copy_host<'a, E, P>(_ev: &E, _snap: (), path: P) -> (Vec<MercuryEffect>, Completed<P>)
 where
     P: HasAncestor<MercuryPath<'a>> + HasStop + CompletesTo<P>,
@@ -71,14 +56,7 @@ where
     (effects, path.complete())
 }
 
-/// Copy `part` of the front tab's URL.
-///
-/// The extension reports that URL as it changes, so the text is normally already here and the
-/// effect carries it. Nothing typed at Chrome and nothing read back out of it: the copy does not
-/// touch the address bar, so what you were part-way through typing there survives it.
-///
-/// Without a reported URL there is nothing to copy, and the key does nothing until the extension
-/// reports. A URL with no host (`about:blank`, `file:///...`) has no host and copies nothing.
+/// Copy `part` of the front tab's URL. Empty if none is reported, or if `Host` is asked of a URL with no host.
 fn copy(root: &Mercury, part: UrlPart) -> Vec<MercuryEffect> {
     let Some(url) = root
         .foreground
@@ -97,16 +75,12 @@ fn copy(root: &Mercury, part: UrlPart) -> Vec<MercuryEffect> {
         .collect()
 }
 
-/// A tmux command: the `ctrl-a` prefix, then the command key.
-///
-/// Two taps rather than one chord, because the prefix has to be let go before the command or
-/// tmux sees `ctrl-p` rather than `p`. Which is now what the shape says, rather than something
-/// the order of six raw events has to get right.
+/// `ctrl-a` then the command key as two taps. One chord would make tmux see `ctrl-p` rather than `p`.
 fn tmux(flags: ModifierFlags, command: Key) -> Vec<MercuryEffect> {
     vec![tap(Key::KeyA, ModifierFlags::CONTROL), tap(command, flags)]
 }
 
-/// `j` in Ghostty: tmux's previous window. Bound alone, because walking windows repeats.
+/// tmux previous window. Bound alone: walking repeats.
 pub(crate) fn tmux_prev<E, P: HasStop + CompletesTo<P>>(
     _ev: &E,
     _snap: (),
@@ -115,7 +89,6 @@ pub(crate) fn tmux_prev<E, P: HasStop + CompletesTo<P>>(
     (tmux(ModifierFlags::empty(), Key::KeyP), p.complete())
 }
 
-/// `k` in Ghostty: tmux's next window.
 pub(crate) fn tmux_next<E, P: HasStop + CompletesTo<P>>(
     _ev: &E,
     _snap: (),
@@ -124,15 +97,7 @@ pub(crate) fn tmux_next<E, P: HasStop + CompletesTo<P>>(
     (tmux(ModifierFlags::empty(), Key::KeyN), p.complete())
 }
 
-/// Jump to a tmux window by its digit.
-///
-/// The window is chosen with the digit's SHIFTED symbol, because that is what the tmux config
-/// binds: `!` through `)` select windows 1 through 10, while the bare digits select window
-/// *indices* and so cannot reach the tenth. `1` sends `ctrl-a !` and `0` sends `ctrl-a )`.
-///
-/// Parameterized, so one unit serves all ten digits: `and!(tmux_window(Key::Num1), go_home)`.
-/// Jumping is a choice rather than something you repeat, which is why `go_home` composes after
-/// it while `tmux_prev` and `tmux_next` are bound alone.
+/// Jump to a tmux window. Sends the digit's shifted symbol (`!`..`)`) because that is what the tmux config binds; bare digits cannot reach window 10. Jumping is a choice, so the bind composes `go_home` after this.
 pub(crate) fn tmux_window<E, P: HasStop + CompletesTo<P>>(
     digit: Key,
 ) -> impl Fn(&E, (), P) -> (Vec<MercuryEffect>, Completed<P>) {

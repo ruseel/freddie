@@ -1,5 +1,4 @@
-//! Accumulation over the shared tree: through an enum, through a `#[child]`
-//! field (boxed and non-boxed), the duplicate-trigger error, and a no-binds node.
+//! Accumulation over the shared tree.
 
 mod common;
 
@@ -9,7 +8,6 @@ use common::{
     App, Armed, ArmedChild, Clash, ClashChild, Deep, Demo, Empty, Layer, Nav, Typing, fg, kb,
 };
 
-// Through the Layer enum and the non-boxed `#[child]` App -> Layer.
 #[test]
 fn through_enum_and_child() {
     let mut app = App {
@@ -23,7 +21,6 @@ fn through_enum_and_child() {
     );
 }
 
-// Through the boxed `#[child]` Typing -> Box<Deep>.
 #[test]
 fn through_boxed_child() {
     let mut app = App {
@@ -40,7 +37,6 @@ fn through_boxed_child() {
     );
 }
 
-// A child rebinding an ancestor's trigger is an error.
 #[test]
 fn duplicate_trigger_is_error() {
     let mut clash = Clash {
@@ -52,16 +48,12 @@ fn duplicate_trigger_is_error() {
     );
 }
 
-// A node with no `#[bind]` is fine; it accumulates nothing.
 #[test]
 fn no_binds_is_empty() {
     let set = bind::accumulate::<Demo, Empty>(&mut Empty {}).unwrap();
     assert!(set.is_empty());
 }
 
-// THE CHECK collects what a node CLAIMS, and a closure trigger's value is read from state at
-// dispatch, so it is not one. Skipping them is also what lets such a trigger be an `Option`: there
-// is no value to insert for an absent one.
 #[test]
 fn a_closure_trigger_is_not_collected() {
     let mut armed = Armed {
@@ -70,13 +62,9 @@ fn a_closure_trigger_is_not_collected() {
         child: ArmedChild { wants: Some("z") },
     };
     let set = bind::accumulate::<Demo, Armed>(&mut armed).unwrap();
-    // Only the constant trigger on the root; the three closure ones contribute nothing, whatever
-    // their state says.
     assert_eq!(set, HashSet::from([kb("esc")]));
 }
 
-// Two nodes holding nothing would produce the same trigger value, which the set would have read as
-// one node clobbering the other. Skipped, they cannot.
 #[test]
 fn two_nodes_with_nothing_to_match_are_not_a_duplicate() {
     let mut armed = Armed {

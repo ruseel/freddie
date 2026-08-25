@@ -1,4 +1,4 @@
-//! Backend selection. macOS on `core-graphics` is the only one so far.
+//! Backend selection. macOS on `core-graphics` is the only backend.
 
 #[cfg(target_os = "macos")]
 mod macos;

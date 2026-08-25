@@ -7,8 +7,7 @@ use crate::handlers::*;
 
 use super::LayerPath;
 
-/// The keymap the overlay shows for this layer. Beside the bindings it describes, so the two are
-/// changed together or the drift is obvious.
+/// Overlay keymap. Beside the binds it describes.
 pub(crate) const OVERLAY: &str = include_str!("overlays/home.txt");
 
 #[derive(Bind, Debug)]
