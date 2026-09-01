@@ -1,7 +1,7 @@
 //! Event sources.
 
 use bind::EventTrigger;
-use freddie_keys::KeyEvent;
+use freddie_keys::{KeyEvent, MouseButtonEvent};
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::WindowChange;
 use freddie_windows_types::{Frame, Pid, WindowId};
@@ -193,6 +193,17 @@ pub fn host(url: &str) -> Option<&str> {
         .find(':')
         .map_or(host_port, |end| &host_port[..end]);
     (!host.is_empty()).then_some(host)
+}
+
+/// Matches any mouse button event.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct MouseButtonPressed;
+
+impl EventTrigger for MouseButtonPressed {
+    type Event = MouseButtonEvent;
+    fn is_matching(&self, _ev: &MouseButtonEvent) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

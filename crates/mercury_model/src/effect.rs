@@ -1,7 +1,7 @@
 //! What a handler asks the consumer to do.
 
 use freddie::TimerEffect;
-use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, PressType};
+use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, MouseButton, PressType};
 
 use freddie_sync::RidingGeneration;
 use freddie_windows_types::{Pid, Placement, WindowId};
@@ -48,6 +48,9 @@ pub enum MercuryEffect {
     HideOverlay,
     /// Menu-bar layer name. Produced only by `set_layer`, so the item and the model cannot disagree.
     ShowLayer(&'static str),
+    /// Replay a mouse side button tap (down+up). Used when the button was held
+    /// but no keyboard chord consumed it.
+    MouseButtonTap(MouseButton),
     /// Arm a timer. It fires after the delay unless the guard the state kept drops first.
     Timer(TimerEffect),
 }

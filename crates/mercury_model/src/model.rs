@@ -1,11 +1,11 @@
 //! The unified trigger, event, and marker the bindings hang off.
 
 use bind::Bindings;
-use freddie_keys::{Key, KeyChord, KeyEvent, KeyPress};
+use freddie_keys::{Key, KeyChord, KeyEvent, KeyPress, MouseButtonEvent};
 
 use crate::{
     AnyKey, FocusLanded, FocusRead, ForegroundEvent, Foregrounded, FrameLanded, FrameRead,
-    MercuryEffect, Quit, TabEvent, Tabbed, WindowEvent, Windowed,
+    MercuryEffect, MouseButtonPressed, Quit, TabEvent, Tabbed, WindowEvent, Windowed,
 };
 use freddie::TimerFired;
 
@@ -15,6 +15,7 @@ pub enum MercuryTrigger {
     KeyPress(KeyPress),
     KeyChord(KeyChord),
     AnyKey(AnyKey),
+    MouseButtonPressed(MouseButtonPressed),
     Foregrounded(Foregrounded),
     Tabbed(Tabbed),
     Windowed(Windowed),
@@ -29,6 +30,7 @@ pub enum MercuryTrigger {
 #[try_into(ref)]
 pub enum MercuryEvent {
     Key(KeyEvent),
+    MouseButton(MouseButtonEvent),
     Foreground(ForegroundEvent),
     Tab(TabEvent),
     Window(WindowEvent),

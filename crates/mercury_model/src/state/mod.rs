@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use bind::{Bind, and, if_not_invalidated};
 use freddie::{TimerGuard, timer_effect_and_guard};
-use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
+use freddie_keys::{Key, KeyEvent, ModifierFlags, MouseButton, PressType};
 use freddie_sync::{GenerationMinter, HeldGeneration, RidingGeneration, Synced};
 use freddie_windows_types::{Frame, Monitor, Pid, Placement, WindowId};
 use laserbeam::PathMut;
@@ -16,7 +16,7 @@ use crate::effect::emit;
 use crate::handlers::*;
 use crate::{
     AnyKey, App, FocusLanded, ForegroundEvent, Foregrounded, FrameLanded, MercuryEffect,
-    MercuryEvent, MercuryStruct, Quit, Site, TabEvent, Tabbed, Windowed,
+    MercuryEvent, MercuryStruct, MouseButtonPressed, Quit, Site, TabEvent, Tabbed, Windowed,
 };
 
 mod app;
@@ -60,6 +60,7 @@ pub const OVERLAY_DWELL: Duration = Duration::from_secs(10);
     Quit => if_not_invalidated(quit),
     |mercury_path| mercury_path.overlay_timer().map(TimerGuard::trigger) => if_not_invalidated(hide_overlay),
     |mercury_path| mercury_path.windows.pending_timer().map(TimerGuard::trigger) => if_not_invalidated(placement_settled),
+    MouseButtonPressed => if_not_invalidated(record_mouse_button),
 )]
 // `o` and escape bind once here. Typing's catch-all claims both first, so there they reach the app.
 #[bind(
@@ -79,6 +80,8 @@ pub struct Mercury {
     pub held: HeldModifiers,
     /// Guard for the overlay's pending hide, or `None` if it is down. One overlay, so this lives at the root.
     overlay: Option<TimerGuard>,
+    /// Mouse side buttons currently held. Tracked for chord detection.
+    pub mouse_held: HeldMouseButtons,
     /// Active layer. Written only through [`set_layer`](Mercury::set_layer), which flushes modifiers.
     #[child]
     layer: Layer,
@@ -391,6 +394,21 @@ pub type ReturnHomeLayersPath<'a> = PathMut<ReturnHomeLayers, AndReturnHomePath<
 pub type AppLayerPath<'a> = PathMut<AppLayer, ReturnHomeLayersPath<'a>>;
 pub type SiteLayerPath<'a> = PathMut<SiteLayer, ReturnHomeLayersPath<'a>>;
 
+/// Mouse chord bindings. Back+key and Forward+key mappings.
+/// Returns effects for the chord, or `None` if no binding exists for this key.
+fn mouse_chord_binding(button: MouseButton, key: Key) -> Option<Vec<MercuryEffect>> {
+    match (button, key) {
+        // Back button chords — same as Nav layer app switching
+        (MouseButton::Back, Key::KeyF) => Some(vec![MercuryEffect::Foreground(App::Ghostty)]),
+        (MouseButton::Back, Key::KeyD) => Some(vec![MercuryEffect::Foreground(App::Obsidian)]),
+        (MouseButton::Back, Key::KeyS) => Some(vec![MercuryEffect::Foreground(App::Codex)]),
+        (MouseButton::Back, Key::KeyA) => Some(vec![MercuryEffect::Foreground(App::Zed)]),
+        (MouseButton::Back, Key::KeyC) => Some(vec![MercuryEffect::Foreground(App::Chrome)]),
+        // Forward button chords — reserved, no bindings yet
+        _ => None,
+    }
+}
+
 impl Mercury {
     /// Boot layer: Typing, so a mercury launched at login does not swallow the keyboard.
     fn boot_layer() -> Layer {
@@ -409,6 +427,7 @@ impl Mercury {
             windows,
             held: HeldModifiers::default(),
             overlay: None,
+            mouse_held: HeldMouseButtons::default(),
             layer: Self::boot_layer(),
         }
     }
@@ -418,13 +437,48 @@ impl Mercury {
     pub fn with_layer(layer: Layer) -> Self {
         Self {
             layer,
+            mouse_held: HeldMouseButtons::default(),
             ..Self::new(None, Windows::default())
         }
     }
 
     #[must_use]
     pub fn handle(&mut self, event: &MercuryEvent) -> Vec<MercuryEffect> {
+        // Mouse chord intercept: if a mouse side button is held and a key goes down,
+        // look up the chord binding. If found, mark the button as Chorded and return
+        // the chord's effects instead of normal dispatch.
+        if let MercuryEvent::Key(key_event) = event {
+            if key_event.press == PressType::Down {
+                if let Some(effects) = self.try_mouse_chord(key_event) {
+                    return effects;
+                }
+            }
+        }
         bind::dispatch::<MercuryStruct, Self, _>(self, event)
+    }
+
+    fn try_mouse_chord(&mut self, key_event: &KeyEvent) -> Option<Vec<MercuryEffect>> {
+        let held_button = if self.mouse_held.back == MouseButtonHoldState::Held
+            || self.mouse_held.back == MouseButtonHoldState::Chorded
+        {
+            Some(MouseButton::Back)
+        } else if self.mouse_held.forward == MouseButtonHoldState::Held
+            || self.mouse_held.forward == MouseButtonHoldState::Chorded
+        {
+            Some(MouseButton::Forward)
+        } else {
+            None
+        }?;
+
+        let effects = mouse_chord_binding(held_button, key_event.key)?;
+
+        // Mark as chorded so release won't replay the button
+        match held_button {
+            MouseButton::Back => self.mouse_held.back = MouseButtonHoldState::Chorded,
+            MouseButton::Forward => self.mouse_held.forward = MouseButtonHoldState::Chorded,
+        }
+
+        Some(effects)
     }
 
     #[must_use]
@@ -612,6 +666,24 @@ impl HeldModifiers {
         f.set(ModifierFlags::SHIFT, self.shift.any_held());
         f
     }
+}
+
+/// Whether a mouse button is released, held (waiting for chord), or already used as chord.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButtonHoldState {
+    #[default]
+    Released,
+    /// Down, no keyboard key yet. If released in this state, replay the original button.
+    Held,
+    /// A keyboard chord consumed this hold. Do not replay on release.
+    Chorded,
+}
+
+/// Which mouse side buttons are physically held.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HeldMouseButtons {
+    pub back: MouseButtonHoldState,
+    pub forward: MouseButtonHoldState,
 }
 
 #[must_use]
