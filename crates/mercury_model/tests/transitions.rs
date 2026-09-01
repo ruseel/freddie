@@ -179,6 +179,18 @@ fn f1_foregrounds_obsidian_from_typing() {
 }
 
 #[test]
+fn f2_and_f3_foreground_their_apps_from_home() {
+    for (function_key, app) in [(Key::F2, App::Ghostty), (Key::F3, App::Chrome)] {
+        let mut m = home();
+        assert_eq!(
+            m.handle(&key(function_key)),
+            vec![MercuryEffect::Foreground(app), shows("Typing")]
+        );
+        assert!(matches!(m.layer(), Layer::Typing(_)));
+    }
+}
+
+#[test]
 fn quit_event_kills_from_home() {
     let mut m = home();
     assert_eq!(m.handle(&quit_event()), vec![MercuryEffect::Kill]);

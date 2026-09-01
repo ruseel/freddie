@@ -65,7 +65,9 @@ pub const OVERLAY_DWELL: Duration = Duration::from_secs(10);
 #[bind(
     Key::KeyO.down() => if_not_invalidated(toggle_overlay),
     Key::Escape.down() => if_not_invalidated(go_home),
-    Key::F1.down() => if_not_invalidated(and!(foreground_obsidian, enter_typing)),
+    Key::F1.down() => if_not_invalidated(and!(foreground_app(App::Obsidian), enter_typing)),
+    Key::F2.down() => if_not_invalidated(and!(foreground_app(App::Ghostty), enter_typing)),
+    Key::F3.down() => if_not_invalidated(and!(foreground_app(App::Chrome), enter_typing)),
 )]
 #[post(AnyKey => track_held_modifiers)]
 pub struct Mercury {

@@ -24,13 +24,11 @@ where
     }
 }
 
-/// Ask macOS to launch or foreground Obsidian without entering an app chooser layer.
-pub(crate) fn foreground_obsidian<E, P: HasStop + CompletesTo<P>>(
-    _ev: &E,
-    _snap: (),
-    p: P,
-) -> (Vec<MercuryEffect>, Completed<P>) {
-    (vec![MercuryEffect::Foreground(App::Obsidian)], p.complete())
+/// Ask macOS to launch or foreground an app without entering an app chooser layer.
+pub(crate) fn foreground_app<E, P: HasStop + CompletesTo<P>>(
+    app: App,
+) -> impl Fn(&E, (), P) -> (Vec<MercuryEffect>, Completed<P>) {
+    move |_ev, _snap, p| (vec![MercuryEffect::Foreground(app)], p.complete())
 }
 
 /// Spotlight's chord. Tap first so the modifier downs from entering typing land on Spotlight.

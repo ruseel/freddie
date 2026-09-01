@@ -6,7 +6,7 @@ use freddie_keys::Key;
 
 #[allow(clippy::wildcard_imports)]
 use crate::handlers::*;
-use crate::{AnyKey, MercuryEffect, MercuryStruct};
+use crate::{AnyKey, App, MercuryEffect, MercuryStruct};
 
 use super::LayerPath;
 
@@ -30,7 +30,9 @@ pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
 #[binds(MercuryStruct)]
 #[bind(
     |path| path.get().jk.window_timer().map(TimerGuard::trigger) => if_not_invalidated(jk_timeout),
-    Key::F1.down() => if_not_invalidated(and!(foreground_obsidian, enter_typing)),
+    Key::F1.down() => if_not_invalidated(and!(foreground_app(App::Obsidian), enter_typing)),
+    Key::F2.down() => if_not_invalidated(and!(foreground_app(App::Ghostty), enter_typing)),
+    Key::F3.down() => if_not_invalidated(and!(foreground_app(App::Chrome), enter_typing)),
     AnyKey => if_not_invalidated(pass_through),
 )]
 pub struct TypingLayer {
