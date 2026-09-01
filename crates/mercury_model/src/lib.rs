@@ -2,7 +2,9 @@
 //!
 //! This crate cannot call macOS: no platform crate in the graph, `unsafe` forbidden, clippy denies std's OS surface. The one impurity is timer-guard minting through `freddie::timer_effect_and_guard`, which is channel construction.
 
-pub use freddie_keys::{Key, KeyEvent, KeyPress, ModifierFlags, MouseButtonEvent, PressType};
+pub use freddie_keys::{
+    Key, KeyEvent, KeyPress, ModifierFlags, MouseButton, MouseButtonEvent, PressType,
+};
 
 mod effect;
 mod handlers;

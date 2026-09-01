@@ -4,9 +4,9 @@ use bind::SimpleRunner;
 use freddie_windows_types::{Frame, Monitor, WindowChange, WindowId};
 use mercury_model::{
     App, Chord, HomeLayer, JK_TIMEOUT, Key, KeyEvent, Layer, Mercury, MercuryEffect, MercuryEvent,
-    MercuryStruct, ModifierFlags, OVERLAY_DWELL, PLACEMENT_SETTLE, PressType,
-    RETURN_TO_HOME_TIMEOUT, ReturnHomeLayers, WindowEvent, Windows, focus_read, foreground,
-    frame_read, key, quit_event, tab,
+    MercuryStruct, ModifierFlags, MouseButton, MouseButtonEvent, OVERLAY_DWELL, PLACEMENT_SETTLE,
+    PressType, RETURN_TO_HOME_TIMEOUT, ReturnHomeLayers, WindowEvent, Windows, focus_read,
+    foreground, frame_read, key, quit_event, tab,
 };
 use mercury_model::{FrontApp, Pid, Placement};
 
@@ -1831,3 +1831,52 @@ fn a_closed_window_is_forgotten() {
     let _ = m.handle(&key(Key::KeyR));
     assert_eq!(m.handle(&key(Key::KeyR)), leaves(vec![]));
 }
+
+const fn mouse_button(button: MouseButton, press: PressType) -> MercuryEvent {
+    MercuryEvent::MouseButton(MouseButtonEvent { button, press })
+}
+
+#[test]
+fn mouse_back_button_alone_replays_tap() {
+    let mut m = home();
+    // Down is swallowed with no effects
+    assert_eq!(m.handle(&mouse_button(MouseButton::Back, PressType::Down)), vec![]);
+    // Up without chord replays the button tap
+    assert_eq!(
+        m.handle(&mouse_button(MouseButton::Back, PressType::Up)),
+        vec![MercuryEffect::MouseButtonTap(MouseButton::Back)]
+    );
+}
+
+#[test]
+fn mouse_forward_button_alone_replays_tap() {
+    let mut m = home();
+    assert_eq!(m.handle(&mouse_button(MouseButton::Forward, PressType::Down)), vec![]);
+    assert_eq!(
+        m.handle(&mouse_button(MouseButton::Forward, PressType::Up)),
+        vec![MercuryEffect::MouseButtonTap(MouseButton::Forward)]
+    );
+}
+
+#[test]
+fn mouse_back_chord_with_keys_swallows_replay() {
+    for (target_key, expected_app) in [
+        (Key::KeyF, App::Ghostty),
+        (Key::KeyD, App::Obsidian),
+        (Key::KeyS, App::Codex),
+        (Key::KeyA, App::Zed),
+        (Key::KeyC, App::Chrome),
+    ] {
+        let mut m = home();
+        // Mouse Back button down
+        assert_eq!(m.handle(&mouse_button(MouseButton::Back, PressType::Down)), vec![]);
+        // Key down while held triggers chord
+        assert_eq!(
+            m.handle(&key(target_key)),
+            vec![MercuryEffect::Foreground(expected_app)]
+        );
+        // Mouse Back button up produces NO tap effect because chord was consumed
+        assert_eq!(m.handle(&mouse_button(MouseButton::Back, PressType::Up)), vec![]);
+    }
+}
+
