@@ -155,7 +155,7 @@ fn decide(input: &KeyEvent, out: Option<KeyEvent>) -> Decision {
 
 /// Marker an emitted event carries so the interceptor skips its own output.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Tag(i64);
+pub struct Tag(i64);
 
 impl Tag {
     /// Per-process random, so an interceptor skips only its own output.
@@ -418,6 +418,7 @@ pub struct MouseInterceptor {
 ///
 /// [`CaptureError`] if the tap cannot be installed.
 pub fn intercept_mouse(
+    tag: Tag,
     on_button: impl Fn(MouseButtonEvent) -> Option<MouseButtonEvent> + Send + 'static,
 ) -> Result<MouseInterceptor, CaptureError> {
     let (ready_tx, ready_rx) = mpsc::channel::<Result<CFRunLoop, ()>>();
@@ -433,6 +434,9 @@ pub fn intercept_mouse(
                 CGEventType::OtherMouseUp,
             ],
             move |_proxy, kind, event| {
+                if tag.marks(event) {
+                    return CallbackResult::Keep;
+                }
                 let button_num = mouse_button_number(event);
                 let button = match button_num {
                     MOUSE_BUTTON_BACK => MouseButton::Back,
@@ -579,6 +583,46 @@ pub struct Emitter {
 }
 
 impl Emitter {
+    #[must_use]
+    pub const fn tag(&self) -> Tag {
+        self.tag
+    }
+
+    /// Press then release `button`.
+    ///
+    /// # Errors
+    ///
+    /// [`EmitError`] if the event could not be posted.
+    pub fn tap_mouse(&self, button: MouseButton) -> Result<(), EmitError> {
+        let button_number: i64 = match button {
+            MouseButton::Back => 3,
+            MouseButton::Forward => 4,
+        };
+        autoreleasepool(|_pool| {
+            use core_graphics::geometry::CGPoint;
+            let pos = match CGEvent::new(self.source.clone()) {
+                Ok(ev) => ev.location(),
+                Err(()) => CGPoint { x: 0.0, y: 0.0 },
+            };
+            for kind in [CGEventType::OtherMouseDown, CGEventType::OtherMouseUp] {
+                let event = CGEvent::new_mouse_event(
+                    self.source.clone(),
+                    kind,
+                    pos,
+                    core_graphics::event::CGMouseButton::Center,
+                )
+                .map_err(|()| EmitError::Post)?;
+                event.set_integer_value_field(
+                    EventField::MOUSE_EVENT_BUTTON_NUMBER,
+                    button_number,
+                );
+                self.tag.stamp(&event);
+                event.post(CGEventTapLocation::Session);
+            }
+            Ok(())
+        })
+    }
+
     /// Post `key` going down or coming up, carrying exactly `flags`.
     /// `CGEventPost` autoreleases two `CFData`s per call; the daemon's worker has no pool
     /// of its own, so this drains one per post.

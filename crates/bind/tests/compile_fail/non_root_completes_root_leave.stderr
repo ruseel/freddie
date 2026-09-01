@@ -4,17 +4,13 @@ error[E0277]: the trait bound `PathMut<Nav, PathMut<Layer, &mut App>>: Completes
 25 |     let _: Completed<AppPath<'_>> = nav.complete();
    |                                         ^^^^^^^^ the trait `CompletesTo<&mut App>` is not implemented for `PathMut<Nav, PathMut<Layer, &mut App>>`
    |
-   = help: `PathMut<N, P>` implements trait `CompletesTo<O>`:
-             CompletesTo<PathMut<N, P>>
-             CompletesTo<PathMut<N1, PathMut<N, P>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N, P>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N, P>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N, P>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N, P>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N, P>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N, P>>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N8, PathMut<N, P>>>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N8, PathMut<N9, PathMut<N, P>>>>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N8, PathMut<N9, PathMut<N10, PathMut<N, P>>>>>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N8, PathMut<N9, PathMut<N10, PathMut<N11, PathMut<N, P>>>>>>>>>>>>>
-             CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N8, PathMut<N9, PathMut<N10, PathMut<N11, PathMut<N12, PathMut<N, P>>>>>>>>>>>>>>
+   = help: the following other types implement trait `CompletesTo<O>`:
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N, P>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N, P>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N, P>>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N, P>>>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N, P>>>>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N, P>>>>>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N, P>>>>>>>>`
+             `PathMut<N, P>` implements `CompletesTo<PathMut<N1, PathMut<N2, PathMut<N3, PathMut<N4, PathMut<N5, PathMut<N6, PathMut<N7, PathMut<N, P>>>>>>>>>`
+           and $N others

@@ -13,7 +13,7 @@ pub use freddie_hid_device::{DeviceInfo, ResolveFailure, SourceId};
 
 mod sys;
 pub use sys::{
-    Emitter, Interceptor, MouseInterceptor, intercept, intercept_mouse, intercept_with_source,
+    Emitter, Interceptor, MouseInterceptor, Tag, intercept, intercept_mouse, intercept_with_source,
 };
 
 /// The keyboard could not be intercepted. Usually Accessibility is not granted.

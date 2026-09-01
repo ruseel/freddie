@@ -167,6 +167,21 @@ async fn serve(
         }
     };
 
+    let mouse_grabbed = freddie_keyboard::intercept_mouse(emitter.tag(), {
+        let event_tx = event_tx.clone();
+        move |ev| {
+            let _ = event_tx.send(MercuryEvent::MouseButton(ev));
+            None
+        }
+    });
+    let mouse_interceptor = match mouse_grabbed {
+        Ok(interceptor) => Some(interceptor),
+        Err(e) => {
+            warn!(error = %e, "could not intercept mouse side buttons");
+            None
+        }
+    };
+
     // SIGTERM from `launchctl bootout` and `mercury stop` becomes the same Quit as the menu bar, so the keyboard is released.
     // Spawned, not a third `select!` arm: a completed arm would drop the other futures and skip the graceful path.
     match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
@@ -192,6 +207,7 @@ async fn serve(
         () = run_event_loop(mercury, event_rx, effect_tx) => {}
         () = run_effect_loop(effect_rx, emitter, event_tx, title_tx, boot.window_sink, boot.overlay) => {}
     }
+    drop(mouse_interceptor);
     drop(interceptor); // hold the grab until here
 }
 
@@ -265,6 +281,10 @@ fn perform_effect(
         MercuryEffect::Emit(ke) => match emitter.emit(ke.key, ke.press, ke.flags) {
             Ok(()) => debug!(key = ?ke.key, press = ?ke.press, "emitted"),
             Err(e) => warn!(key = ?ke.key, press = ?ke.press, error = %e, "emit failed"),
+        },
+        MercuryEffect::MouseButtonTap(button) => match emitter.tap_mouse(button) {
+            Ok(()) => debug!(?button, "mouse button tapped"),
+            Err(e) => warn!(?button, error = %e, "mouse button tap failed"),
         },
         MercuryEffect::SetFrame(placement) => {
             if let Some(windows) = windows {

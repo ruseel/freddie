@@ -4,7 +4,7 @@
 mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::{
-    Emitter, Interceptor, MouseInterceptor, intercept, intercept_mouse, intercept_with_source,
+    Emitter, Interceptor, MouseInterceptor, Tag, intercept, intercept_mouse, intercept_with_source,
 };
 
 #[cfg(not(target_os = "macos"))]
