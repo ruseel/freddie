@@ -438,7 +438,7 @@ pub fn intercept_mouse(
                 if tag.marks(event) {
                     return CallbackResult::Keep;
                 }
-                if kind == CGEventType::LeftMouseDown {
+                if matches!(kind, CGEventType::LeftMouseDown) {
                     tracing::info!("left mouse click received in tap");
                     return CallbackResult::Keep;
                 }
