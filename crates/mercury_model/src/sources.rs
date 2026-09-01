@@ -112,6 +112,7 @@ bind::self_trigger!(Quit);
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum App {
     Chrome,
+    Discord,
     Finder,
     Ghostty,
     Obsidian,
@@ -126,6 +127,7 @@ impl App {
     pub fn from_bundle_id(bundle_id: &str) -> Self {
         match bundle_id {
             "com.google.Chrome" => Self::Chrome,
+            "com.hnc.Discord" => Self::Discord,
             "com.apple.finder" => Self::Finder,
             "com.mitchellh.ghostty" => Self::Ghostty,
             "md.obsidian" => Self::Obsidian,
@@ -139,6 +141,7 @@ impl App {
     pub const fn bundle_id(self) -> Option<&'static str> {
         match self {
             Self::Chrome => Some("com.google.Chrome"),
+            Self::Discord => Some("com.hnc.Discord"),
             Self::Finder => Some("com.apple.finder"),
             Self::Ghostty => Some("com.mitchellh.ghostty"),
             Self::Obsidian => Some("md.obsidian"),

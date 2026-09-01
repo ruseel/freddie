@@ -378,7 +378,8 @@ fn nav_c_foregrounds_chrome_and_enters_inapp() {
 fn every_nav_choice_enters_inapp() {
     for (k, app) in [
         (Key::KeyC, App::Chrome),
-        (Key::KeyG, App::Ghostty),
+        (Key::KeyD, App::Discord),
+        (Key::KeyF, App::Ghostty),
         (Key::KeyZ, App::Zed),
     ] {
         let mut m = home();
@@ -995,7 +996,13 @@ fn foregrounding_chrome_is_reported_back() {
 
 #[test]
 fn bundle_id_round_trips() {
-    for app in [App::Chrome, App::Ghostty, App::Obsidian, App::Zed] {
+    for app in [
+        App::Chrome,
+        App::Discord,
+        App::Ghostty,
+        App::Obsidian,
+        App::Zed,
+    ] {
         let id = app.bundle_id().expect("a real app has a bundle id");
         assert_eq!(App::from_bundle_id(id), app);
     }
@@ -1006,6 +1013,7 @@ fn bundle_id_round_trips() {
 #[test]
 fn reported_bundle_ids_map() {
     assert_eq!(App::from_bundle_id("com.google.Chrome"), App::Chrome);
+    assert_eq!(App::from_bundle_id("com.hnc.Discord"), App::Discord);
     assert_eq!(App::from_bundle_id("com.mitchellh.ghostty"), App::Ghostty);
     assert_eq!(App::from_bundle_id("md.obsidian"), App::Obsidian);
     assert_eq!(App::from_bundle_id("dev.zed.Zed"), App::Zed);

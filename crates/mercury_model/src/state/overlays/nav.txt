@@ -1,8 +1,8 @@
   NAV
   ────────────────────
   c    chrome
-  f    finder
-  g    ghostty
+  d    discord
+  f    ghostty
   z    zed
   spc  spotlight
   esc  home

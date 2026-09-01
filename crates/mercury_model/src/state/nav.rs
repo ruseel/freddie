@@ -15,8 +15,8 @@ pub(crate) const OVERLAY: &str = include_str!("overlays/nav.txt");
 #[binds(MercuryStruct)]
 #[bind(
     Key::KeyC.down() => if_not_invalidated(open(App::Chrome)),
-    Key::KeyF.down() => if_not_invalidated(open(App::Finder)),
-    Key::KeyG.down() => if_not_invalidated(open(App::Ghostty)),
+    Key::KeyD.down() => if_not_invalidated(open(App::Discord)),
+    Key::KeyF.down() => if_not_invalidated(open(App::Ghostty)),
     Key::KeyZ.down() => if_not_invalidated(open(App::Zed)),
     Key::Space.down() => if_not_invalidated(and!(tap_cmd_space, enter_typing)),
 )]
