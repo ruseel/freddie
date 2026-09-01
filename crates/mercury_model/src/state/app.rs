@@ -19,7 +19,7 @@ pub(crate) const fn overlay_for(app: App) -> &'static str {
     match app {
         App::Chrome => CHROME_OVERLAY,
         App::Ghostty => GHOSTTY_OVERLAY,
-        App::Finder | App::Zed | App::Other => INAPP_OVERLAY,
+        App::Finder | App::Obsidian | App::Zed | App::Other => INAPP_OVERLAY,
     }
 }
 

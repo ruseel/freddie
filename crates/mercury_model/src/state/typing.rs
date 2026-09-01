@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bind::{Bind, if_not_invalidated};
+use bind::{Bind, and, if_not_invalidated};
 use freddie::{KeySequence, TimerGuard, timer_effect_and_guard};
 use freddie_keys::Key;
 
@@ -30,6 +30,7 @@ pub(crate) fn arm_jk_timeout(window: Duration) -> (TimerGuard, MercuryEffect) {
 #[binds(MercuryStruct)]
 #[bind(
     |path| path.get().jk.window_timer().map(TimerGuard::trigger) => if_not_invalidated(jk_timeout),
+    Key::F1.down() => if_not_invalidated(and!(foreground_obsidian, enter_typing)),
     AnyKey => if_not_invalidated(pass_through),
 )]
 pub struct TypingLayer {

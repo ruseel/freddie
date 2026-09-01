@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
-use bind::{Bind, if_not_invalidated};
+use bind::{Bind, and, if_not_invalidated};
 use freddie::{TimerGuard, timer_effect_and_guard};
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
 use freddie_sync::{GenerationMinter, HeldGeneration, RidingGeneration, Synced};
@@ -65,6 +65,7 @@ pub const OVERLAY_DWELL: Duration = Duration::from_secs(10);
 #[bind(
     Key::KeyO.down() => if_not_invalidated(toggle_overlay),
     Key::Escape.down() => if_not_invalidated(go_home),
+    Key::F1.down() => if_not_invalidated(and!(foreground_obsidian, enter_typing)),
 )]
 #[post(AnyKey => track_held_modifiers)]
 pub struct Mercury {
@@ -94,6 +95,7 @@ pub enum ForegroundedApp {
     Chrome(ForegroundedChrome),
     Finder,
     Ghostty,
+    Obsidian,
     Zed,
     #[default]
     Other,
@@ -106,6 +108,7 @@ impl ForegroundedApp {
             Self::Chrome(_) => App::Chrome,
             Self::Finder => App::Finder,
             Self::Ghostty => App::Ghostty,
+            Self::Obsidian => App::Obsidian,
             Self::Zed => App::Zed,
             Self::Other => App::Other,
         }
@@ -125,6 +128,7 @@ impl ForegroundedApp {
             App::Chrome => Self::Chrome(ForegroundedChrome { url: None }),
             App::Finder => Self::Finder,
             App::Ghostty => Self::Ghostty,
+            App::Obsidian => Self::Obsidian,
             App::Zed => Self::Zed,
             App::Other => Self::Other,
         }

@@ -159,6 +159,26 @@ fn home_q_quits() {
 }
 
 #[test]
+fn f1_foregrounds_obsidian_and_enters_typing_from_home() {
+    let mut m = home();
+    assert_eq!(
+        m.handle(&key(Key::F1)),
+        vec![MercuryEffect::Foreground(App::Obsidian), shows("Typing")]
+    );
+    assert!(matches!(m.layer(), Layer::Typing(_)));
+}
+
+#[test]
+fn f1_foregrounds_obsidian_from_typing() {
+    let mut m = Mercury::new(Some(FrontApp::new(App::Other, Pid(1))), Windows::default());
+    assert_eq!(
+        m.handle(&key(Key::F1)),
+        vec![MercuryEffect::Foreground(App::Obsidian), shows("Typing")]
+    );
+    assert!(matches!(m.layer(), Layer::Typing(_)));
+}
+
+#[test]
 fn quit_event_kills_from_home() {
     let mut m = home();
     assert_eq!(m.handle(&quit_event()), vec![MercuryEffect::Kill]);
@@ -963,7 +983,7 @@ fn foregrounding_chrome_is_reported_back() {
 
 #[test]
 fn bundle_id_round_trips() {
-    for app in [App::Chrome, App::Ghostty, App::Zed] {
+    for app in [App::Chrome, App::Ghostty, App::Obsidian, App::Zed] {
         let id = app.bundle_id().expect("a real app has a bundle id");
         assert_eq!(App::from_bundle_id(id), app);
     }
@@ -975,6 +995,7 @@ fn bundle_id_round_trips() {
 fn reported_bundle_ids_map() {
     assert_eq!(App::from_bundle_id("com.google.Chrome"), App::Chrome);
     assert_eq!(App::from_bundle_id("com.mitchellh.ghostty"), App::Ghostty);
+    assert_eq!(App::from_bundle_id("md.obsidian"), App::Obsidian);
     assert_eq!(App::from_bundle_id("dev.zed.Zed"), App::Zed);
     assert_eq!(App::from_bundle_id("Google Chrome"), App::Other);
 }

@@ -114,6 +114,7 @@ pub enum App {
     Chrome,
     Finder,
     Ghostty,
+    Obsidian,
     Zed,
     #[default]
     Other,
@@ -127,6 +128,7 @@ impl App {
             "com.google.Chrome" => Self::Chrome,
             "com.apple.finder" => Self::Finder,
             "com.mitchellh.ghostty" => Self::Ghostty,
+            "md.obsidian" => Self::Obsidian,
             "dev.zed.Zed" => Self::Zed,
             _ => Self::Other,
         }
@@ -139,6 +141,7 @@ impl App {
             Self::Chrome => Some("com.google.Chrome"),
             Self::Finder => Some("com.apple.finder"),
             Self::Ghostty => Some("com.mitchellh.ghostty"),
+            Self::Obsidian => Some("md.obsidian"),
             Self::Zed => Some("dev.zed.Zed"),
             Self::Other => None,
         }
