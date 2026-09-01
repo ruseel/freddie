@@ -12,7 +12,9 @@ pub use freddie_keys::{Key, KeyEvent, PressType};
 pub use freddie_hid_device::{DeviceInfo, ResolveFailure, SourceId};
 
 mod sys;
-pub use sys::{Emitter, Interceptor, intercept, intercept_with_source};
+pub use sys::{
+    Emitter, Interceptor, MouseInterceptor, intercept, intercept_mouse, intercept_with_source,
+};
 
 /// The keyboard could not be intercepted. Usually Accessibility is not granted.
 #[derive(Debug)]

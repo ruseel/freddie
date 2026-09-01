@@ -15,6 +15,7 @@ use core_graphics::event::{
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use freddie_hid_device::{DeviceInfo, ResolveFailure, SourceId, resolve, source_of};
 use freddie_keys::{Key, KeyEvent, ModifierFlags, PressType};
+use freddie_keys::{MouseButton, MouseButtonEvent};
 use objc2::rc::autoreleasepool;
 
 use crate::{CaptureError, EmitError};
@@ -175,6 +176,13 @@ impl Tag {
 
 fn keycode(event: &CGEvent) -> Option<CGKeyCode> {
     u16::try_from(event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE)).ok()
+}
+
+const MOUSE_BUTTON_BACK: i64 = 3;
+const MOUSE_BUTTON_FORWARD: i64 = 4;
+
+fn mouse_button_number(event: &CGEvent) -> i64 {
+    event.get_integer_value_field(EventField::MOUSE_EVENT_BUTTON_NUMBER)
 }
 
 /// Physical down of each `FlagsChanged` key. Direction is a toggle of this set, not the
@@ -396,6 +404,72 @@ fn run_tap(
     let source = CGEventSource::new(CGEventSourceStateID::Private).map_err(|()| CaptureError)?;
     let emitter = Emitter { tag, source };
     Ok((interceptor, emitter))
+}
+
+/// An active grab of the mouse side buttons. Dropping it releases the grab.
+pub struct MouseInterceptor {
+    _tap: TapThread,
+}
+
+/// Intercept mouse side buttons (OtherMouse buttons 3 and 4).
+/// The callback receives the button event; returning `None` swallows it.
+///
+/// # Errors
+///
+/// [`CaptureError`] if the tap cannot be installed.
+pub fn intercept_mouse(
+    on_button: impl Fn(MouseButtonEvent) -> Option<MouseButtonEvent> + Send + 'static,
+) -> Result<MouseInterceptor, CaptureError> {
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<CFRunLoop, ()>>();
+    let signal = ready_tx.clone();
+
+    let thread = std::thread::spawn(move || {
+        let outcome = CGEventTap::with_enabled(
+            CGEventTapLocation::Session,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            vec![
+                CGEventType::OtherMouseDown,
+                CGEventType::OtherMouseUp,
+            ],
+            move |_proxy, kind, event| {
+                let button_num = mouse_button_number(event);
+                let button = match button_num {
+                    MOUSE_BUTTON_BACK => MouseButton::Back,
+                    MOUSE_BUTTON_FORWARD => MouseButton::Forward,
+                    _ => return CallbackResult::Keep,
+                };
+                let press = match kind {
+                    CGEventType::OtherMouseDown => PressType::Down,
+                    CGEventType::OtherMouseUp => PressType::Up,
+                    _ => return CallbackResult::Keep,
+                };
+                let input = MouseButtonEvent { button, press };
+                tracing::debug!(?input, "mouse tap");
+                match on_button(input) {
+                    None => CallbackResult::Drop,
+                    Some(_) => CallbackResult::Keep,
+                }
+            },
+            || {
+                let _ = ready_tx.send(Ok(CFRunLoop::get_current()));
+                CFRunLoop::run_current();
+            },
+        );
+        if outcome.is_err() {
+            let _ = signal.send(Err(()));
+        }
+    });
+
+    let Ok(Ok(run_loop)) = ready_rx.recv() else {
+        return Err(CaptureError);
+    };
+    Ok(MouseInterceptor {
+        _tap: TapThread {
+            run_loop,
+            thread: Some(thread),
+        },
+    })
 }
 
 /// An active grab of the keyboard. Dropping it drops the [`TapThread`], which releases it.
