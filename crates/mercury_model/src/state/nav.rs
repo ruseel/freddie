@@ -14,10 +14,11 @@ pub(crate) const OVERLAY: &str = include_str!("overlays/nav.txt");
 #[node(parent_path = ReturnHomeLayersPath)]
 #[binds(MercuryStruct)]
 #[bind(
+    Key::KeyA.down() => if_not_invalidated(open(App::Zed)),
     Key::KeyC.down() => if_not_invalidated(open(App::Chrome)),
-    Key::KeyD.down() => if_not_invalidated(open(App::Discord)),
+    Key::KeyD.down() => if_not_invalidated(open(App::Obsidian)),
     Key::KeyF.down() => if_not_invalidated(open(App::Ghostty)),
-    Key::KeyZ.down() => if_not_invalidated(open(App::Zed)),
+    Key::KeyS.down() => if_not_invalidated(open(App::Codex)),
     Key::Space.down() => if_not_invalidated(and!(tap_cmd_space, enter_typing)),
 )]
 pub struct NavLayer;

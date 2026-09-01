@@ -95,6 +95,7 @@ pub struct ForegroundedChrome {
 #[derive(Debug, Default)]
 pub enum ForegroundedApp {
     Chrome(ForegroundedChrome),
+    Codex,
     Discord,
     Finder,
     Ghostty,
@@ -109,6 +110,7 @@ impl ForegroundedApp {
     pub const fn identity(&self) -> App {
         match self {
             Self::Chrome(_) => App::Chrome,
+            Self::Codex => App::Codex,
             Self::Discord => App::Discord,
             Self::Finder => App::Finder,
             Self::Ghostty => App::Ghostty,
@@ -130,6 +132,7 @@ impl ForegroundedApp {
     pub const fn from_identity(app: App) -> Self {
         match app {
             App::Chrome => Self::Chrome(ForegroundedChrome { url: None }),
+            App::Codex => Self::Codex,
             App::Discord => Self::Discord,
             App::Finder => Self::Finder,
             App::Ghostty => Self::Ghostty,

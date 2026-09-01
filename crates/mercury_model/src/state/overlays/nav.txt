@@ -1,8 +1,9 @@
   NAV
   ────────────────────
+  a    zed
   c    chrome
-  d    discord
+  d    obsidian
   f    ghostty
-  z    zed
+  s    codex
   spc  spotlight
   esc  home
