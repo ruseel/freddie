@@ -438,6 +438,7 @@ pub fn intercept_mouse(
                     return CallbackResult::Keep;
                 }
                 let button_num = mouse_button_number(event);
+                tracing::info!(?kind, button_num, "raw mouse event received in tap");
                 let button = match button_num {
                     MOUSE_BUTTON_BACK => MouseButton::Back,
                     MOUSE_BUTTON_FORWARD => MouseButton::Forward,
@@ -449,18 +450,20 @@ pub fn intercept_mouse(
                     _ => return CallbackResult::Keep,
                 };
                 let input = MouseButtonEvent { button, press };
-                tracing::debug!(?input, "mouse tap");
+                tracing::info!(?input, "intercepted mouse side button");
                 match on_button(input) {
                     None => CallbackResult::Drop,
                     Some(_) => CallbackResult::Keep,
                 }
             },
             || {
+                tracing::info!("mouse tap run loop running");
                 let _ = ready_tx.send(Ok(CFRunLoop::get_current()));
                 CFRunLoop::run_current();
             },
         );
         if outcome.is_err() {
+            tracing::error!("CGEventTap::with_enabled failed for mouse");
             let _ = signal.send(Err(()));
         }
     });
