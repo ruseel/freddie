@@ -430,11 +430,16 @@ pub fn intercept_mouse(
             CGEventTapPlacement::HeadInsertEventTap,
             CGEventTapOptions::Default,
             vec![
+                CGEventType::LeftMouseDown,
                 CGEventType::OtherMouseDown,
                 CGEventType::OtherMouseUp,
             ],
             move |_proxy, kind, event| {
                 if tag.marks(event) {
+                    return CallbackResult::Keep;
+                }
+                if kind == CGEventType::LeftMouseDown {
+                    tracing::info!("left mouse click received in tap");
                     return CallbackResult::Keep;
                 }
                 let button_num = mouse_button_number(event);
