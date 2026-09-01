@@ -1861,11 +1861,10 @@ fn mouse_forward_button_alone_replays_tap() {
 #[test]
 fn mouse_back_chord_with_keys_swallows_replay() {
     for (target_key, expected_app) in [
-        (Key::KeyF, App::Ghostty),
-        (Key::KeyD, App::Obsidian),
-        (Key::KeyS, App::Codex),
+        (Key::KeyF, App::Obsidian),
+        (Key::KeyD, App::Ghostty),
+        (Key::KeyS, App::Chrome),
         (Key::KeyA, App::Zed),
-        (Key::KeyC, App::Chrome),
     ] {
         let mut m = home();
         // Mouse Back button down

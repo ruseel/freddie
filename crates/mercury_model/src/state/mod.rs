@@ -398,12 +398,11 @@ pub type SiteLayerPath<'a> = PathMut<SiteLayer, ReturnHomeLayersPath<'a>>;
 /// Returns effects for the chord, or `None` if no binding exists for this key.
 fn mouse_chord_binding(button: MouseButton, key: Key) -> Option<Vec<MercuryEffect>> {
     match (button, key) {
-        // Back button chords — same as Nav layer app switching
-        (MouseButton::Back, Key::KeyF) => Some(vec![MercuryEffect::Foreground(App::Ghostty)]),
-        (MouseButton::Back, Key::KeyD) => Some(vec![MercuryEffect::Foreground(App::Obsidian)]),
-        (MouseButton::Back, Key::KeyS) => Some(vec![MercuryEffect::Foreground(App::Codex)]),
+        // Back button chords
+        (MouseButton::Back, Key::KeyF) => Some(vec![MercuryEffect::Foreground(App::Obsidian)]),
+        (MouseButton::Back, Key::KeyD) => Some(vec![MercuryEffect::Foreground(App::Ghostty)]),
+        (MouseButton::Back, Key::KeyS) => Some(vec![MercuryEffect::Foreground(App::Chrome)]),
         (MouseButton::Back, Key::KeyA) => Some(vec![MercuryEffect::Foreground(App::Zed)]),
-        (MouseButton::Back, Key::KeyC) => Some(vec![MercuryEffect::Foreground(App::Chrome)]),
         // Forward button chords — reserved, no bindings yet
         _ => None,
     }
