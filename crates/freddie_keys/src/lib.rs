@@ -645,6 +645,22 @@ pub trait WithDevice: Sized {
 
 impl<T: EventTrigger> WithDevice for T {}
 
+/// A physical mouse button, named by its HID function.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum MouseButton {
+    /// Button 3 on macOS: the "back" thumb button.
+    Back,
+    /// Button 4 on macOS: the "forward" thumb button.
+    Forward,
+}
+
+/// A mouse button going down or coming up.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct MouseButtonEvent {
+    pub button: MouseButton,
+    pub press: PressType,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Key, KeyEvent, KeyGroup, ModifierFlags, PressType};
