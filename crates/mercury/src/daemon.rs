@@ -318,6 +318,10 @@ fn perform_effect(
 ) -> ControlFlow<()> {
     match effect {
         MercuryEffect::Foreground(app) => foreground_app(app),
+        MercuryEffect::RunProgram(program) => match std::process::Command::new(program).spawn() {
+            Ok(child) => debug!(%program, pid = child.id(), "started program"),
+            Err(error) => warn!(%program, %error, "could not start program"),
+        },
         MercuryEffect::Tap(Chord { key, flags }) => match emitter.tap(key, flags) {
             Ok(()) => debug!(?key, ?flags, "tapped"),
             Err(e) => warn!(?key, ?flags, error = %e, "tap failed"),

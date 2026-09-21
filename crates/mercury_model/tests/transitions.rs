@@ -1849,6 +1849,25 @@ fn mouse_back_button_alone_replays_tap() {
 }
 
 #[test]
+fn mouse_back_r_starts_rover_focus() {
+    let mut m = home();
+    assert_eq!(
+        m.handle(&mouse_button(MouseButton::Back, PressType::Down)),
+        vec![]
+    );
+    assert_eq!(
+        m.handle(&key(Key::KeyR)),
+        vec![MercuryEffect::RunProgram(
+            "/Users/ruseel/.local/bin/herdr-rover-focus"
+        )]
+    );
+    assert_eq!(
+        m.handle(&mouse_button(MouseButton::Back, PressType::Up)),
+        vec![]
+    );
+}
+
+#[test]
 fn mouse_forward_button_alone_replays_tap() {
     let mut m = home();
     assert_eq!(m.handle(&mouse_button(MouseButton::Forward, PressType::Down)), vec![]);

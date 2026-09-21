@@ -403,6 +403,9 @@ fn mouse_chord_binding(button: MouseButton, key: Key) -> Option<Vec<MercuryEffec
         (MouseButton::Back, Key::KeyD) => Some(vec![MercuryEffect::Foreground(App::Ghostty)]),
         (MouseButton::Back, Key::KeyS) => Some(vec![MercuryEffect::Foreground(App::Chrome)]),
         (MouseButton::Back, Key::KeyA) => Some(vec![MercuryEffect::Foreground(App::Zed)]),
+        (MouseButton::Back, Key::KeyR) => Some(vec![MercuryEffect::RunProgram(
+            "/Users/ruseel/.local/bin/herdr-rover-focus",
+        )]),
         // Forward button chords — reserved, no bindings yet
         _ => None,
     }

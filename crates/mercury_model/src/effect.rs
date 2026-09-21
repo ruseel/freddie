@@ -28,6 +28,7 @@ pub enum UrlPart {
 #[derive(Debug)]
 pub enum MercuryEffect {
     Foreground(super::App),
+    RunProgram(&'static str),
     Tap(Chord),
     /// One press or release. For passthrough, where down and up arrive as separate events. A chord is [`Tap`](Self::Tap).
     Emit(KeyEvent),
