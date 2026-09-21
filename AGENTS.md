@@ -115,6 +115,8 @@ Stopping and restarting it is what the verbs are for, and they work. Say what yo
 
 `bacon restart` does the rebuild and the replacement together, so an edited binding goes live without touching a window.
 
+After changing Mercury, update the persistent binary and its login agent as well as the live daemon: run `cargo install --path crates/mercury`, then `mercury agent install` (which replaces the launchd job with the installed binary), then `mercury restart`. A `target/debug/mercury` restart is only a temporary development run; launchd starts `~/.cargo/bin/mercury daemon` at login.
+
 The event socket reaches a running daemon without touching the process: connect to `127.0.0.1:3883` and send a frame, then read the dispatch record it produced out of the log.
 
 ## Logs
