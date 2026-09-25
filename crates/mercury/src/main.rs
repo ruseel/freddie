@@ -5,6 +5,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use freddie_cli::{App, Instance, NoArgs};
 
+mod automation_socket;
 mod daemon;
 mod launch_agent;
 
@@ -31,6 +32,10 @@ pub struct MercuryArgs {
     /// The loopback port the event socket listens on.
     #[arg(long, env = "MERCURY_PORT", default_value_t = mercury::DEFAULT_PORT)]
     pub port: u16,
+
+    /// The loopback port that receives Button Decks automation commands.
+    #[arg(long, env = "MERCURY_AUTOMATION_PORT", default_value_t = automation_socket::DEFAULT_PORT)]
+    pub automation_port: u16,
 }
 
 pub struct Mercury;
@@ -47,7 +52,7 @@ impl App for Mercury {
     }
 
     fn run_daemon(_: &NoArgs, args: &MercuryArgs) {
-        daemon::run(args.port);
+        daemon::run(args.port, args.automation_port);
     }
 }
 

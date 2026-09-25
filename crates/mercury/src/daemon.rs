@@ -19,10 +19,17 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot::error::TryRecvError;
 use tracing::{debug, error, info, warn};
 
+use crate::automation_socket::{self, AutomationCommand};
+
+pub(crate) enum RuntimeEffect {
+    Mercury(MercuryEffect),
+    Automation(AutomationCommand),
+}
+
 /// Give the main thread to the `AppKit` run loop; run mercury on a worker thread.
 ///
 /// `AppKit` delivers callbacks only while main is in a run loop. Dropping the worker's `Stopper` stops that loop. A panic aborts from the panic hook instead. Declaration order: the runtime drops before the `Stopper`.
-pub(crate) fn run(port: u16) {
+pub(crate) fn run(port: u16, automation_port: u16) {
     // Accessory NSApp, before the status item and before the loop pumps events.
     freddie_main_loop::init_menu_bar_app();
 
@@ -99,7 +106,14 @@ pub(crate) fn run(port: u16) {
                 .enable_all()
                 .build()
                 .expect("a current-thread runtime with no reactor cannot fail to build");
-            runtime.block_on(serve(boot, event_tx, event_rx, title_tx, port));
+            runtime.block_on(serve(
+                boot,
+                event_tx,
+                event_rx,
+                title_tx,
+                port,
+                automation_port,
+            ));
         })
         .expect("spawning the runtime thread");
 
@@ -138,8 +152,9 @@ async fn serve(
     event_rx: UnboundedReceiver<MercuryEvent>,
     title_tx: freddie_main_loop::WakingSender<&'static str>,
     port: u16,
+    automation_port: u16,
 ) {
-    let (effect_tx, effect_rx) = unbounded_channel::<MercuryEffect>();
+    let (effect_tx, effect_rx) = unbounded_channel::<RuntimeEffect>();
 
     // Dropping it closes the port. Above the keyboard grab so a refused start has not taken the keyboard. A busy port panics: the single-instance lock means the squatter is some other program.
     let _socket = freddie_event_socket::listen(port, {
@@ -149,6 +164,14 @@ async fn serve(
     .unwrap_or_else(|e| {
         panic!("could not bind 127.0.0.1:{port}: {e}; find it with `lsof -i :{port}`")
     });
+
+    let _automation_socket = automation_socket::listen(automation_port, effect_tx.clone())
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "could not bind 127.0.0.1:{automation_port}: {e}; find it with `lsof -i :{automation_port}`"
+            )
+        });
 
     let grabbed = freddie_keyboard::intercept({
         let event_tx = event_tx.clone();
@@ -214,7 +237,7 @@ async fn serve(
 async fn run_event_loop(
     mut state: Mercury,
     mut event_rx: UnboundedReceiver<MercuryEvent>,
-    effect_tx: UnboundedSender<MercuryEffect>,
+    effect_tx: UnboundedSender<RuntimeEffect>,
 ) {
     info!(state = ?state, "initial state");
     while let Some(event) = event_rx.recv().await {
@@ -226,21 +249,21 @@ async fn run_event_loop(
 fn dispatch_event(
     state: &mut Mercury,
     event: &MercuryEvent,
-    effect_tx: &UnboundedSender<MercuryEffect>,
+    effect_tx: &UnboundedSender<RuntimeEffect>,
 ) {
     let start = Instant::now();
     let effects = state.handle(event);
     let duration_us = u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX);
     info!(event = ?event, effects = ?effects, duration_us, state = ?state, "dispatch");
     for effect in effects {
-        let _ = effect_tx.send(effect);
+        let _ = effect_tx.send(RuntimeEffect::Mercury(effect));
     }
 }
 
 /// Perform effects in dispatch order until one says to stop. `!Send` for the same reason as [`serve`].
 #[expect(clippy::future_not_send)]
 async fn run_effect_loop(
-    mut effect_rx: UnboundedReceiver<MercuryEffect>,
+    mut effect_rx: UnboundedReceiver<RuntimeEffect>,
     emitter: Emitter,
     event_tx: UnboundedSender<MercuryEvent>,
     title_tx: freddie_main_loop::WakingSender<&'static str>,
@@ -248,19 +271,40 @@ async fn run_effect_loop(
     overlay: OverlaySink,
 ) {
     while let Some(effect) = effect_rx.recv().await {
-        if perform_effect(
-            effect,
-            &emitter,
-            &event_tx,
-            &title_tx,
-            windows.as_ref(),
-            &overlay,
-        )
-        .is_break()
-        {
+        let flow = match effect {
+            RuntimeEffect::Mercury(effect) => perform_effect(
+                effect,
+                &emitter,
+                &event_tx,
+                &title_tx,
+                windows.as_ref(),
+                &overlay,
+            ),
+            RuntimeEffect::Automation(command) => perform_automation(command, &emitter),
+        };
+        if flow.is_break() {
             break;
         }
     }
+}
+
+fn perform_automation(command: AutomationCommand, emitter: &Emitter) -> ControlFlow<()> {
+    match command {
+        AutomationCommand::Tap(chord) => match emitter.tap(chord.key, chord.flags) {
+            Ok(()) => debug!(key = ?chord.key, flags = ?chord.flags, "automation tapped"),
+            Err(e) => {
+                warn!(key = ?chord.key, flags = ?chord.flags, error = %e, "automation tap failed")
+            }
+        },
+        AutomationCommand::Emit(event) => match emitter.emit(event.key, event.press, event.flags) {
+            Ok(()) => debug!(key = ?event.key, press = ?event.press, "automation emitted"),
+            Err(e) => {
+                warn!(key = ?event.key, press = ?event.press, error = %e, "automation emit failed")
+            }
+        },
+        AutomationCommand::Foreground(bundle_id) => foreground_bundle(bundle_id),
+    }
+    ControlFlow::Continue(())
 }
 
 /// `Kill` breaks rather than exiting so destructors release the keyboard and stop the run loop.
@@ -364,5 +408,12 @@ fn foreground_app(app: App) {
     std::thread::spawn(move || match freddie_app_nav::foreground(bundle_id) {
         Ok(()) => debug!(app = bundle_id, "foregrounded"),
         Err(e) => warn!(app = bundle_id, error = %e, "foreground failed"),
+    });
+}
+
+fn foreground_bundle(bundle_id: String) {
+    std::thread::spawn(move || match freddie_app_nav::foreground(&bundle_id) {
+        Ok(()) => debug!(app = %bundle_id, "automation foregrounded"),
+        Err(e) => warn!(app = %bundle_id, error = %e, "automation foreground failed"),
     });
 }
